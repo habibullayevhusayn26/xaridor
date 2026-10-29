@@ -118,14 +118,29 @@ async function viewStats() {
 }
 
 async function viewOrders() {
-  const list = await api("/admin/orders");
-  $("#view").innerHTML = `<div class="panel">${list.length ? `<table><tr><th>№ / sana</th><th>Mijoz</th><th>Mahsulotlar</th><th>Jami</th><th>Holat</th></tr>` +
+  const search = new URLSearchParams(location.search).get("order") || "";
+  const list = await api(search ? "/admin/orders/search?id=" + encodeURIComponent(search) : "/admin/orders");
+  $("#view").innerHTML = `<form class="form" id="orderSearch" style="grid-template-columns:1fr auto auto;align-items:end">
+      <label>Buyurtma raqami bo'yicha qidirish<input name="id" placeholder="Masalan: XR1234567" value="${esc(search)}"></label>
+      <button class="btn dark">Qidirish</button>${search ? `<button class="btn line" type="button" id="clearOrderSearch">Barchasi</button>` : ""}
+    </form>
+    <div class="panel">${list.length ? `<table><tr><th>№ / sana</th><th>Mijoz</th><th>Mahsulotlar</th><th>Jami</th><th>Holat</th></tr>` +
     list.map(o => `<tr><td><b>${o.id}</b><br><small class="meta">${new Date(o.created).toLocaleString("uz-UZ")}</small></td>
       <td>${esc(o.name)}<br>${esc(o.phone)}<br><small class="meta">${esc(o.city)}, ${esc(o.addr)}<br>${esc(o.pay)}${o.promo ? " · " + esc(o.promo) : ""}</small></td>
       <td>${o.items.map(i => `<div class="it" style="display:flex;gap:6px;align-items:center">${ic(i.icon, 16)}${esc(i.name)} × ${i.q}</div>`).join("")}</td>
       <td><b>${fmt(o.total)}</b></td>
       <td><select data-oid="${o.id}">${STATUSES.map(s => `<option ${s === o.status ? "selected" : ""}>${s}</option>`).join("")}</select></td></tr>`).join("") + `</table>`
-    : `<p class="meta">Hozircha buyurtma yo'q.</p>`}</div>`;
+    : `<p class="meta">${search ? "Bu raqamli buyurtma topilmadi." : "Hozircha buyurtma yo'q."}</p>`}</div>`;
+  $("#orderSearch").onsubmit = e => {
+    e.preventDefault();
+    const id = new FormData(e.target).get("id").trim();
+    history.replaceState(null, "", id ? "?order=" + encodeURIComponent(id) : location.pathname);
+    viewOrders();
+  };
+  if ($("#clearOrderSearch")) $("#clearOrderSearch").onclick = () => {
+    history.replaceState(null, "", location.pathname);
+    viewOrders();
+  };
   $("#view").onchange = async e => {
     const id = e.target.dataset.oid; if (!id) return;
     try { await api("/admin/orders/" + id, { method: "PATCH", body: { status: e.target.value } }); toast("Holat yangilandi"); }

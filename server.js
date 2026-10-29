@@ -276,6 +276,13 @@ admin.post("/telegram-test", ah(async (req, res) => {
   catch (e) { res.status(400).json({ error: e.message }); }
 }));
 
+admin.get("/orders/search", ah(async (req, res) => {
+  const id = String(req.query.id || "").trim().toUpperCase();
+  if (!id) return res.status(400).json({ error: "Buyurtma raqamini kiriting." });
+  const order = await orders.findOne({ _id: id });
+  res.json(order ? [orderOut(order)] : []);
+}));
+
 admin.get("/orders", ah(async (req, res) =>
   res.json((await orders.find().sort({ created: -1 }).limit(500).toArray()).map(orderOut))));
 
