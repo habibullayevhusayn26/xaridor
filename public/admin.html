@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xaridor — admin panel</title>
+<link rel="icon" href="logo.svg">
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+.a-top{background:#fff;border-bottom:1px solid var(--line)}
+.a-top .wrap{display:flex;align-items:center;gap:14px;padding-top:12px;padding-bottom:12px;flex-wrap:wrap}
+.a-top .sp{flex:1}
+.a-tabs{display:flex;gap:6px;margin:18px 0}
+.a-tabs button{padding:10px 18px;border-radius:10px;background:#fff;font-weight:600}
+.a-tabs button.on{background:var(--teal);color:#fff}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.kpi{background:#fff;border-radius:var(--r);padding:16px}
+.kpi small{color:var(--mute)}.kpi b{display:block;font-size:24px;margin-top:4px}
+.panel{background:#fff;border-radius:var(--r);padding:16px;margin-top:14px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mute);font-weight:500;font-size:13px}
+td select{padding:6px 8px;border:1.5px solid var(--line);border-radius:8px}
+.mini{padding:6px 12px;border-radius:8px;font-size:13px;font-weight:600;border:1.5px solid var(--line)}
+.mini:hover{border-color:var(--teal)}.mini.del:hover{border-color:var(--coral);color:var(--coral)}
+.login{max-width:380px;margin:12vh auto;background:#fff;padding:26px;border-radius:20px}
+.mini{cursor:pointer;background:#fff;color:var(--ink)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.off{opacity:.5}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="modal" id="modal" hidden><div class="box" id="modalBox"></div></div>
+<div class="toast" id="toast" hidden></div>
+<script src="icons.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const fmt = n => new Intl.NumberFormat("uz-UZ").format(Math.round(n)).replace(/,/g, " ") + " so'm";
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const CATS = [];
+const STATUSES = ["Qabul qilindi", "Yig'ilmoqda", "Yo'lda", "Yetkazildi", "Bekor qilindi"];
+let tab = "stats", cache = {};
+
+const tok = () => { try { return localStorage.getItem("bz_admin_token"); } catch { return null; } };
+async function api(url, opts = {}) {
+  const r = await fetch("/api" + url, {
+    method: opts.method || "GET",
+    headers: { "Content-Type": "application/json", ...(tok() ? { Authorization: "Bearer " + tok() } : {}) },
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  let d = {}; try { d = await r.json(); } catch {}
+  if (!r.ok) { const e = new Error(d.error || "Xatolik"); e.status = r.status; throw e; }
+  return d;
+}
+let tt;
+function toast(m) { const t = $("#toast"); t.textContent = m; t.hidden = false; clearTimeout(tt); tt = setTimeout(() => t.hidden = true, 2200); }
+
+function loginView(msg = "") {
+  $("#app").innerHTML = `<form class="login form" id="lf"><h2>Admin kirish</h2>
+    <label>Telefon<input name="phone" required placeholder="+998 90 123 45 67"></label>
+    <label>Parol<input name="pass" type="password" required></label>
+    <div class="err">${esc(msg)}</div><button class="btn sun block">Kirish</button></form>`;
+  $("#lf").onsubmit = async e => {
+    e.preventDefault();
+    try {
+      const r = await api("/auth/login", { method: "POST", body: Object.fromEntries(new FormData(e.target)) });
+      if (r.user.role !== "admin") return loginView("Bu akkaunt admin emas.");
+      localStorage.setItem("bz_admin_token", r.token); start();
+    } catch (err) { loginView(err.message); }
+  };
+}
+
+async function start() {
+  try {
+    const me = await api("/me");
+    if (me.role !== "admin") throw Object.assign(new Error("Bu akkaunt admin emas."), { status: 401 });
+    CATS.push(...(await api("/categories")).filter(c => !CATS.some(x => x.id === c.id)));
+    shell(me);
+  } catch (e) { localStorage.removeItem("bz_admin_token"); loginView(e.message); }
+}
+
+function shell(me) {
+  $("#app").innerHTML = `<div class="a-top"><div class="wrap"><img src="logo.svg" width="34" height="34" alt=""><b style="font-family:Unbounded,sans-serif;color:var(--teal)">Xaridor admin</b>
+    <span class="sp"></span><button class="mini" id="tgTest">Telegramni tekshirish</button><a href="/" class="mini" style="text-decoration:none">Saytga o'tish</a><button class="mini" id="out">Chiqish (${esc(me.name)})</button></div></div>
+    <div class="wrap"><div class="a-tabs" id="tabs">
+      <button data-t="stats">Statistika</button><button data-t="orders">Buyurtmalar</button><button data-t="products">Mahsulotlar</button></div>
+      <div id="view"></div></div>`;
+  $("#tgTest").onclick = async () => { try { await api("/admin/telegram-test", { method: "POST" }); toast("Telegramga sinov xabari yuborildi"); } catch (e) { toast("Telegram xatosi: " + e.message); } };
+  $("#out").onclick = () => { localStorage.removeItem("bz_admin_token"); loginView(); };
+  $("#tabs").onclick = e => { const b = e.target.closest("[data-t]"); if (b) { tab = b.dataset.t; render(); } };
+  render();
+}
+
+async function render() {
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
+  $("#view").innerHTML = `<p class="meta">Yuklanmoqda...</p>`;
+  try { await ({ stats: viewStats, orders: viewOrders, products: viewProducts })[tab](); }
+  catch (e) { if (e.status === 401 || e.status === 403) { localStorage.removeItem("bz_admin_token"); loginView("Qayta kiring."); } else toast(e.message); }
+}
+
+async function viewStats() {
+  const s = await api("/admin/stats");
+  $("#view").innerHTML = `<div class="kpis">
+    <div class="kpi"><small>Jami buyurtmalar</small><b>${s.orders}</b></div>
+    <div class="kpi"><small>Yangi (qabul qilindi)</small><b>${s.newOrders}</b></div>
+    <div class="kpi"><small>Umumiy tushum</small><b>${fmt(s.revenue)}</b></div>
+    <div class="kpi"><small>Bugungi tushum</small><b>${fmt(s.today)}</b></div>
+    <div class="kpi"><small>Mijozlar</small><b>${s.users}</b></div>
+    <div class="kpi"><small>Mahsulotlar</small><b>${s.products}</b></div>
+    <div class="kpi"><small>Telegramga yuborilmagan</small><b>${s.telegramPending}</b></div></div>
+    <div class="panel"><b>Omborda kam qolgan (5 dona va kam)</b>${s.lowStock.length ?
+      `<table>${s.lowStock.map(p => `<tr><td>${esc(p.name)}</td><td>${p.stock} dona</td></tr>`).join("")}</table>` : `<p class="meta">Hammasi yetarli.</p>`}</div>`;
+}
+
+async function viewOrders() {
+  const list = await api("/admin/orders");
+  $("#view").innerHTML = `<div class="panel">${list.length ? `<table><tr><th>№ / sana</th><th>Mijoz</th><th>Mahsulotlar</th><th>Jami</th><th>Holat</th></tr>` +
+    list.map(o => `<tr><td><b>${o.id}</b><br><small class="meta">${new Date(o.created).toLocaleString("uz-UZ")}</small></td>
+      <td>${esc(o.name)}<br>${esc(o.phone)}<br><small class="meta">${esc(o.city)}, ${esc(o.addr)}<br>${esc(o.pay)}${o.promo ? " · " + esc(o.promo) : ""}</small></td>
+      <td>${o.items.map(i => `<div class="it" style="display:flex;gap:6px;align-items:center">${ic(i.icon, 16)}${esc(i.name)} × ${i.q}</div>`).join("")}</td>
+      <td><b>${fmt(o.total)}</b></td>
+      <td><select data-oid="${o.id}">${STATUSES.map(s => `<option ${s === o.status ? "selected" : ""}>${s}</option>`).join("")}</select></td></tr>`).join("") + `</table>`
+    : `<p class="meta">Hozircha buyurtma yo'q.</p>`}</div>`;
+  $("#view").onchange = async e => {
+    const id = e.target.dataset.oid; if (!id) return;
+    try { await api("/admin/orders/" + id, { method: "PATCH", body: { status: e.target.value } }); toast("Holat yangilandi"); }
+    catch (err) { toast(err.message); render(); }
+  };
+}
+
+async function viewProducts() {
+  const list = cache.products = await api("/admin/products");
+  $("#view").innerHTML = `<div style="display:flex;justify-content:flex-end"><button class="btn dark" id="newP">+ Mahsulot qo'shish</button></div>
+    <div class="panel"><table><tr><th></th><th>Nomi</th><th>Kategoriya</th><th>Narx</th><th>Ombor</th><th></th></tr>` +
+    list.map(p => `<tr class="${p.active ? "" : "off"}"><td style="color:var(--teal)">${ic(p.icon, 28)}</td><td>${esc(p.name)}${p.active ? "" : "<br><small class='meta'>yashirin</small>"}</td>
+      <td>${esc((CATS.find(c => c.id === p.cat) || {}).name || p.cat)}</td><td>${fmt(p.price)}<br><small class="meta"><s>${fmt(p.old)}</s></small></td><td>${p.stock}</td>
+      <td style="white-space:nowrap"><button class="mini" data-edit="${p.id}">Tahrirlash</button> <button class="mini del" data-del="${p.id}">O'chirish</button></td></tr>`).join("") + `</table></div>`;
+  $("#newP").onclick = () => productForm();
+  $("#view").onclick = async e => {
+    const ed = e.target.closest("[data-edit]"), dl = e.target.closest("[data-del]");
+    if (ed) productForm(cache.products.find(p => p.id == ed.dataset.edit));
+    if (dl && confirm("Mahsulot o'chirilsinmi?")) { await api("/admin/products/" + dl.dataset.del, { method: "DELETE" }); toast("O'chirildi"); render(); }
+  };
+}
+
+function productForm(p = {}) {
+  const v = (k, d = "") => esc(p[k] ?? d);
+  $("#modalBox").innerHTML = `<button class="x" id="mx" aria-label="Yopish">${ic("x", 20)}</button><h2>${p.id ? "Mahsulotni tahrirlash" : "Yangi mahsulot"}</h2>
+    <form class="form" id="pf">
+      <label>Nomi<input name="name" required value="${v("name")}"></label>
+      <label>Kategoriya<select name="cat">${CATS.map(c => `<option value="${c.id}" ${c.id === p.cat ? "selected" : ""}>${c.name}</option>`).join("")}</select></label>
+      <div class="two"><label>Narx (so'm)<input name="price" type="number" min="1" required value="${v("price")}"></label>
+        <label>Eski narx (chegirmadan oldin)<input name="old" type="number" min="1" value="${v("old")}"></label></div>
+      <div class="two"><label>Ombordagi soni<input name="stock" type="number" min="0" required value="${v("stock", 50)}"></label>
+        <label>Ikon<select name="icon">${ICON_CHOICES.map(([k, n]) => `<option value="${k}" ${k === (p.icon || "package") ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
+      <label>Orqa fon rangi<input name="color" type="color" value="${v("color", "#E6EEF0")}"></label>
+      <label>Tavsif<textarea name="desc" rows="3">${v("desc")}</textarea></label>
+      <label style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" name="active" ${p.active === false ? "" : "checked"}> Saytda ko'rsatilsin</label>
+      <div class="err" id="pe"></div><button class="btn sun block">Saqlash</button></form>`;
+  $("#modal").hidden = false;
+  $("#mx").onclick = () => $("#modal").hidden = true;
+  $("#pf").onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target)); f.active = e.target.active.checked;
+    try {
+      await api(p.id ? "/admin/products/" + p.id : "/admin/products", { method: p.id ? "PUT" : "POST", body: f });
+      $("#modal").hidden = true; toast("Saqlandi"); render();
+    } catch (err) { $("#pe").textContent = err.message; }
+  };
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape") $("#modal").hidden = true; });
+
+tok() ? start() : loginView();
+</script>
+</body>
+</html>

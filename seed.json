@@ -1,0 +1,339 @@
+{
+ "categories": [
+  {
+   "id": "elektronika",
+   "name": "Elektronika",
+   "icon": "smartphone"
+  },
+  {
+   "id": "texnika",
+   "name": "Maishiy texnika",
+   "icon": "plug"
+  },
+  {
+   "id": "kiyim",
+   "name": "Kiyim",
+   "icon": "shirt"
+  },
+  {
+   "id": "poyabzal",
+   "name": "Poyabzal",
+   "icon": "sneaker"
+  },
+  {
+   "id": "uy",
+   "name": "Uy-ro'zg'or",
+   "icon": "sofa"
+  },
+  {
+   "id": "gozallik",
+   "name": "Go'zallik",
+   "icon": "sparkles"
+  },
+  {
+   "id": "bolalar",
+   "name": "Bolalar",
+   "icon": "teddy"
+  },
+  {
+   "id": "sport",
+   "name": "Sport",
+   "icon": "dumbbell"
+  },
+  {
+   "id": "oziq",
+   "name": "Oziq-ovqat",
+   "icon": "apple"
+  }
+ ],
+ "products": [
+  {
+   "id": 1,
+   "name": "Smartfon Nova X5, 128 GB",
+   "cat": "elektronika",
+   "price": 2890000,
+   "old": 3490000,
+   "rating": 4.7,
+   "sold": 1240,
+   "icon": "smartphone",
+   "color": "#DDEBF7",
+   "desc": "6.5 dyuymli AMOLED ekran, 50 MP kamera, 5000 mAh batareya. Kafolat 12 oy."
+  },
+  {
+   "id": 2,
+   "name": "Simsiz quloqchin Pulse",
+   "cat": "elektronika",
+   "price": 289000,
+   "old": 459000,
+   "rating": 4.5,
+   "sold": 3120,
+   "icon": "headphones",
+   "color": "#E6E1F5",
+   "desc": "Bluetooth 5.3, shovqinni bostirish, 30 soat ish vaqti."
+  },
+  {
+   "id": 3,
+   "name": "Noutbuk Atlas 15, 16/512 GB",
+   "cat": "elektronika",
+   "price": 7450000,
+   "old": 8200000,
+   "rating": 4.8,
+   "sold": 410,
+   "icon": "laptop",
+   "color": "#DCE8E8",
+   "desc": "15.6 dyuym IPS, 16 GB RAM, 512 GB SSD. O'qish va ish uchun ideal."
+  },
+  {
+   "id": 4,
+   "name": "Smart soat Tempo 2",
+   "cat": "elektronika",
+   "price": 540000,
+   "old": 790000,
+   "rating": 4.3,
+   "sold": 1870,
+   "icon": "watch",
+   "color": "#F5E6D8",
+   "desc": "Yurak urishi, uyqu monitoringi, suvga chidamli."
+  },
+  {
+   "id": 5,
+   "name": "Changyutgich CleanBot",
+   "cat": "texnika",
+   "price": 1290000,
+   "old": 1690000,
+   "rating": 4.6,
+   "sold": 690,
+   "icon": "vacuum",
+   "color": "#E3F1E4",
+   "desc": "Kuchli so'rish, HEPA filtr, 2 soatlik simsiz ishlash."
+  },
+  {
+   "id": 6,
+   "name": "Elektr choynak 1.8 L",
+   "cat": "texnika",
+   "price": 149000,
+   "old": 219000,
+   "rating": 4.4,
+   "sold": 5230,
+   "icon": "kettle",
+   "color": "#F8E3E0",
+   "desc": "Zanglamaydigan po'lat, avtomatik o'chish, 2200 Vt."
+  },
+  {
+   "id": 7,
+   "name": "Blender Mix Pro 1000 Vt",
+   "cat": "texnika",
+   "price": 329000,
+   "old": 420000,
+   "rating": 4.5,
+   "sold": 1470,
+   "icon": "blender",
+   "color": "#FFF0C9",
+   "desc": "6 ta pichoq, 1.5 L stakan, muz maydalash funksiyasi."
+  },
+  {
+   "id": 8,
+   "name": "Erkaklar futbolkasi (paxta)",
+   "cat": "kiyim",
+   "price": 79000,
+   "old": 119000,
+   "rating": 4.2,
+   "sold": 8120,
+   "icon": "shirt",
+   "color": "#DCE8F5",
+   "desc": "100% paxta, S–XXL o'lchamlar, 6 xil rang."
+  },
+  {
+   "id": 9,
+   "name": "Ayollar ko'ylagi 'Atlas'",
+   "cat": "kiyim",
+   "price": 259000,
+   "old": 349000,
+   "rating": 4.6,
+   "sold": 920,
+   "icon": "dress",
+   "color": "#F7DCE8",
+   "desc": "An'anaviy atlas to'qimasi, zamonaviy kesim."
+  },
+  {
+   "id": 10,
+   "name": "Qishki kurtka Aqlli",
+   "cat": "kiyim",
+   "price": 689000,
+   "old": 899000,
+   "rating": 4.5,
+   "sold": 560,
+   "icon": "jacket",
+   "color": "#E1E7EF",
+   "desc": "Suv o'tkazmaydigan, -20°C gacha issiq tutadi."
+  },
+  {
+   "id": 11,
+   "name": "Krossovka Runner 42",
+   "cat": "poyabzal",
+   "price": 349000,
+   "old": 520000,
+   "rating": 4.6,
+   "sold": 2210,
+   "icon": "sneaker",
+   "color": "#E7F0DC",
+   "desc": "Yengil, nafas oluvchi to'r, yumshoq taglik."
+  },
+  {
+   "id": 12,
+   "name": "Charm tufli klassik",
+   "cat": "poyabzal",
+   "price": 459000,
+   "old": 590000,
+   "rating": 4.4,
+   "sold": 740,
+   "icon": "shoe",
+   "color": "#EADFD3",
+   "desc": "Haqiqiy charm, qo'lda tikilgan."
+  },
+  {
+   "id": 13,
+   "name": "Divan yostig'i to'plami (4 dona)",
+   "cat": "uy",
+   "price": 119000,
+   "old": 179000,
+   "rating": 4.3,
+   "sold": 1630,
+   "icon": "sofa",
+   "color": "#F3E4D6",
+   "desc": "Yumshoq mato, yuvish mumkin, 45×45 sm."
+  },
+  {
+   "id": 14,
+   "name": "Idish-tovoq to'plami, 24 dona",
+   "cat": "uy",
+   "price": 389000,
+   "old": 520000,
+   "rating": 4.7,
+   "sold": 880,
+   "icon": "utensils",
+   "color": "#DDEFF0",
+   "desc": "Chiroyli keramika, mikroto'lqinli pechda ishlatiladi."
+  },
+  {
+   "id": 15,
+   "name": "LED stol chirog'i",
+   "cat": "uy",
+   "price": 99000,
+   "old": 149000,
+   "rating": 4.5,
+   "sold": 2760,
+   "icon": "lightbulb",
+   "color": "#FFF3C4",
+   "desc": "3 rejim, USB zaryad, ko'zni charchatmaydi."
+  },
+  {
+   "id": 16,
+   "name": "Yuz uchun krem 50 ml",
+   "cat": "gozallik",
+   "price": 89000,
+   "old": 135000,
+   "rating": 4.6,
+   "sold": 3980,
+   "icon": "jar",
+   "color": "#F9E1E6",
+   "desc": "Namlovchi, SPF 30, har qanday teri turi uchun."
+  },
+  {
+   "id": 17,
+   "name": "Parfyum 'Samarqand' 50 ml",
+   "cat": "gozallik",
+   "price": 329000,
+   "old": 450000,
+   "rating": 4.8,
+   "sold": 640,
+   "icon": "perfume",
+   "color": "#EBDDF2",
+   "desc": "Gul va oriental ziravorlar hidi, uzoq saqlanadi."
+  },
+  {
+   "id": 18,
+   "name": "Lego tipidagi konstruktor, 500 dona",
+   "cat": "bolalar",
+   "price": 219000,
+   "old": 310000,
+   "rating": 4.7,
+   "sold": 1520,
+   "icon": "blocks",
+   "color": "#FBE2D0",
+   "desc": "6+ yosh, rivojlantiruvchi o'yin."
+  },
+  {
+   "id": 19,
+   "name": "Yumshoq ayiqcha 60 sm",
+   "cat": "bolalar",
+   "price": 129000,
+   "old": 189000,
+   "rating": 4.8,
+   "sold": 2340,
+   "icon": "teddy",
+   "color": "#F2E1CF",
+   "desc": "Gipoallergen to'ldirgich, yuvish mumkin."
+  },
+  {
+   "id": 20,
+   "name": "Futbol to'pi, 5-o'lcham",
+   "cat": "sport",
+   "price": 159000,
+   "old": 229000,
+   "rating": 4.4,
+   "sold": 1980,
+   "icon": "ball",
+   "color": "#E0EDE0",
+   "desc": "Sun'iy charm, yaxshi ushlab turadi."
+  },
+  {
+   "id": 21,
+   "name": "Yoga gilami 6 mm",
+   "cat": "sport",
+   "price": 109000,
+   "old": 159000,
+   "rating": 4.5,
+   "sold": 1260,
+   "icon": "mat",
+   "color": "#E8E0F3",
+   "desc": "Sirpanmaydigan, ko'tarib yurishga qulay."
+  },
+  {
+   "id": 22,
+   "name": "Gantel to'plami 2×5 kg",
+   "cat": "sport",
+   "price": 249000,
+   "old": 330000,
+   "rating": 4.6,
+   "sold": 820,
+   "icon": "dumbbell",
+   "color": "#DADFE6",
+   "desc": "Qoplamali, polni zararlamaydi."
+  },
+  {
+   "id": 23,
+   "name": "Tabiiy asal 1 kg",
+   "cat": "oziq",
+   "price": 99000,
+   "old": 130000,
+   "rating": 4.9,
+   "sold": 6230,
+   "icon": "honey",
+   "color": "#FFEDB8",
+   "desc": "Tog' asali, aralashmasiz."
+  },
+  {
+   "id": 24,
+   "name": "Quritilgan mevalar assorti 500 g",
+   "cat": "oziq",
+   "price": 69000,
+   "old": 95000,
+   "rating": 4.7,
+   "sold": 4150,
+   "icon": "apple",
+   "color": "#EFE0CC",
+   "desc": "Mayiz, o'rik, bodom, yong'oq aralashmasi."
+  }
+ ]
+}

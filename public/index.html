@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xaridor — onlayn bozor</title>
+<link rel="icon" href="logo.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="strip">Toshkent bo'ylab 1 kunda yetkazish · 200 000 so'mdan yuqori buyurtmalar bepul</div>
+
+<header class="head">
+  <div class="wrap bar">
+    <a class="brand" href="#" id="brand"><img src="logo.svg" alt="" width="40" height="40"><span>Xaridor</span></a>
+    <div class="cat-wrap">
+      <button class="btn dark" id="catBtn"><span data-ic="menu" data-size="20"></span>Katalog</button>
+      <div class="cat-menu" id="catMenu" hidden></div>
+    </div>
+    <div class="search">
+      <input id="q" type="search" placeholder="Mahsulot qidirish" autocomplete="off" aria-label="Qidiruv">
+      <button id="qBtn" aria-label="Qidirish"><span data-ic="search" data-size="20"></span></button>
+      <div class="suggest" id="suggest" hidden></div>
+    </div>
+    <nav class="acts">
+      <button class="act" id="accBtn"><span data-ic="user" data-size="22"></span><small id="accLabel">Kirish</small></button>
+      <button class="act" id="favBtn"><span data-ic="heart" data-size="22"></span><small>Sevimlilar</small><i id="favCount" hidden>0</i></button>
+      <button class="act" id="cartBtn"><span data-ic="cart" data-size="22"></span><small>Savat</small><i id="cartCount" hidden>0</i></button>
+    </nav>
+  </div>
+  <div class="wrap chips" id="chips"></div>
+</header>
+
+<main class="wrap">
+  <section class="hero" id="hero" aria-label="Aksiyalar"></section>
+
+  <section id="catGrid" class="cat-grid"></section>
+
+  <section>
+    <div class="toolbar">
+      <h1 id="title">Barcha mahsulotlar</h1>
+      <div class="filters">
+        <input id="pmin" type="number" min="0" placeholder="Narx dan" aria-label="Minimal narx">
+        <input id="pmax" type="number" min="0" placeholder="Narx gacha" aria-label="Maksimal narx">
+        <select id="sort" aria-label="Saralash">
+          <option value="pop">Mashhur</option>
+          <option value="cheap">Avval arzon</option>
+          <option value="exp">Avval qimmat</option>
+          <option value="rate">Reyting bo'yicha</option>
+          <option value="disc">Chegirma bo'yicha</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid" id="grid"></div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div><b>Xaridor</b><p>O'zbekiston bo'ylab onlayn xarid.</p></div>
+    <div><b>Yordam</b><p>+998 71 000 00 00<br>Har kuni 9:00–21:00</p></div>
+    <div><b>Promokod</b><p>XARID10 — birinchi buyurtmaga 10% chegirma</p></div>
+  </div>
+</footer>
+
+<div class="overlay" id="overlay" hidden></div>
+
+<aside class="drawer" id="cartDrawer" hidden aria-label="Savat">
+  <div class="dhead"><h2>Savat</h2><button class="x" data-close aria-label="Yopish"><span data-ic="x" data-size="20"></span></button></div>
+  <div class="dbody" id="cartBody"></div>
+  <div class="dfoot" id="cartFoot"></div>
+</aside>
+
+<div class="modal" id="modal" hidden><div class="box" id="modalBox"></div></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="icons.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
