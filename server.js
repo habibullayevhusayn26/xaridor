@@ -52,6 +52,7 @@ async function tgCall(method, payload) {
 // ---- Sozlamalar ----
 const PROMO = { XARID10: 0.1, YANGI5: 0.05 };
 const FREE_SHIP = 200000, SHIP = 15000;
+const MAX_PRODUCT_IMAGE_BYTES = 5 * 1024 * 1024;
 const STATUSES = ["Qabul qilindi", "Yig'ilmoqda", "Yo'lda", "Yetkazildi", "Bekor qilindi"];
 const PAYS = ["Naqd", "Karta", "Muddatli"];
 const seed = JSON.parse(fs.readFileSync(path.join(__dirname, "seed.json"), "utf8"));
@@ -98,9 +99,26 @@ async function flushTelegram() {
 const sign = u => jwt.sign({ id: String(u._id), role: u.role }, SECRET, { expiresIn: "30d" });
 const publicUser = u => ({ id: String(u._id), name: u.name, phone: u.phone, role: u.role });
 const productOut = p => ({ id: p._id, name: p.name, cat: p.cat, price: p.price, old: p.old, rating: p.rating,
-  sold: p.sold, icon: p.icon, color: p.color, desc: p.descr, stock: p.stock, active: !!p.active });
+  sold: p.sold, icon: p.icon, color: p.color, image: p.image ? `/api/products/${p._id}/image` : null,
+  desc: p.descr, stock: p.stock, active: !!p.active });
 const orderOut = o => ({ id: o._id, name: o.name, phone: o.phone, city: o.city, addr: o.addr, pay: o.pay,
   total: o.total, promo: o.promo, status: o.status, items: o.items, created: o.created.toISOString(), tgSent: !!o.tgSent });
+
+function readProductImage(value) {
+  if (typeof value !== "string") throw new Error("Mahsulot rasmi noto'g'ri.");
+  const match = value.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/);
+  if (!match) throw new Error("JPG, PNG yoki WebP rasm tanlang.");
+  const data = Buffer.from(match[2], "base64");
+  if (!data.length || data.length > MAX_PRODUCT_IMAGE_BYTES || data.toString("base64") !== match[2])
+    throw new Error("Rasm hajmi 5 MB dan oshmasligi kerak.");
+  const validSignature = match[1] === "image/jpeg"
+    ? data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff
+    : match[1] === "image/png"
+      ? data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      : data.toString("ascii", 0, 4) === "RIFF" && data.toString("ascii", 8, 12) === "WEBP";
+  if (!validSignature) throw new Error("Rasm faylining formati noto'g'ri.");
+  return { contentType: match[1], data: match[2] };
+}
 
 function auth(required = true) {
   return ah(async (req, res, next) => {
@@ -123,7 +141,7 @@ const adminOnly = (req, res, next) =>
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1); // Render/Railway orqasida haqiqiy IP ni ko'rish uchun
-app.use(express.json({ limit: "50kb" }));
+app.use(express.json({ limit: "7mb" }));
 app.use((req, res, next) => {
   res.set({ "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin" });
   next();
@@ -138,6 +156,14 @@ app.get("/api/health", (req, res) => res.json({ ok: true }));
 app.get("/api/categories", (req, res) => res.json(CATEGORIES));
 app.get("/api/products", ah(async (req, res) =>
   res.json((await products.find({ active: true }).sort({ sold: -1 }).toArray()).map(productOut))));
+app.get("/api/products/:id/image", ah(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id)) return res.status(404).end();
+  const p = await products.findOne({ _id: id }, { projection: { image: 1 } });
+  if (!p || !p.image) return res.status(404).end();
+  res.set({ "Content-Type": p.image.contentType, "Cache-Control": "no-cache" });
+  res.send(Buffer.from(p.image.data, "base64"));
+}));
 
 app.post("/api/auth/register", authLimiter, ah(async (req, res) => {
   const name = String(req.body.name || "").trim().slice(0, 80);
@@ -284,16 +310,25 @@ function readProduct(b) {
   return p;
 }
 admin.post("/products", ah(async (req, res) => {
-  let p;
-  try { p = readProduct(req.body); } catch (e) { return res.status(400).json({ error: e.message }); }
-  const doc = { _id: await nextProductId(), ...p, rating: 4.5, sold: 0, created: new Date() };
+  let p, image;
+  try {
+    p = readProduct(req.body);
+    if (req.body.image) image = readProductImage(req.body.image);
+  } catch (e) { return res.status(400).json({ error: e.message }); }
+  const doc = { _id: await nextProductId(), ...p, ...(image ? { image } : {}), rating: 4.5, sold: 0, created: new Date() };
   await products.insertOne(doc);
   res.json(productOut(doc));
 }));
 admin.put("/products/:id", ah(async (req, res) => {
-  let p;
-  try { p = readProduct(req.body); } catch (e) { return res.status(400).json({ error: e.message }); }
-  const r = await products.findOneAndUpdate({ _id: Number(req.params.id) }, { $set: p }, { returnDocument: "after" });
+  let p, image;
+  try {
+    p = readProduct(req.body);
+    if (req.body.image) image = readProductImage(req.body.image);
+  } catch (e) { return res.status(400).json({ error: e.message }); }
+  const removeImage = req.body.removeImage === true || req.body.removeImage === "true" || req.body.removeImage === "on";
+  const update = { $set: { ...p }, ...(image ? {} : removeImage ? { $unset: { image: "" } } : {}) };
+  if (image) update.$set.image = image;
+  const r = await products.findOneAndUpdate({ _id: Number(req.params.id) }, update, { returnDocument: "after" });
   if (!r) return res.status(404).json({ error: "Mahsulot topilmadi." });
   res.json(productOut(r));
 }));

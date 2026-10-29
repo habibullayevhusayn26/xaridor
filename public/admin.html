@@ -28,6 +28,9 @@ td select{padding:6px 8px;border:1.5px solid var(--line);border-radius:8px}
 .mini{cursor:pointer;background:#fff;color:var(--ink)}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .off{opacity:.5}
+.product-thumb{width:44px;height:44px;display:grid;place-items:center;border-radius:8px;overflow:hidden;color:var(--teal)}
+.product-thumb img{width:100%;height:100%;object-fit:cover}
+.image-preview{width:100%;max-height:220px;object-fit:contain;background:var(--bg);border-radius:10px}
 </style>
 </head>
 <body>
@@ -134,7 +137,7 @@ async function viewProducts() {
   const list = cache.products = await api("/admin/products");
   $("#view").innerHTML = `<div style="display:flex;justify-content:flex-end"><button class="btn dark" id="newP">+ Mahsulot qo'shish</button></div>
     <div class="panel"><table><tr><th></th><th>Nomi</th><th>Kategoriya</th><th>Narx</th><th>Ombor</th><th></th></tr>` +
-    list.map(p => `<tr class="${p.active ? "" : "off"}"><td style="color:var(--teal)">${ic(p.icon, 28)}</td><td>${esc(p.name)}${p.active ? "" : "<br><small class='meta'>yashirin</small>"}</td>
+    list.map(p => `<tr class="${p.active ? "" : "off"}"><td><div class="product-thumb" style="background:${p.color}">${p.image ? `<img src="${esc(p.image)}" alt="">` : ic(p.icon, 28)}</div></td><td>${esc(p.name)}${p.active ? "" : "<br><small class='meta'>yashirin</small>"}</td>
       <td>${esc((CATS.find(c => c.id === p.cat) || {}).name || p.cat)}</td><td>${fmt(p.price)}<br><small class="meta"><s>${fmt(p.old)}</s></small></td><td>${p.stock}</td>
       <td style="white-space:nowrap"><button class="mini" data-edit="${p.id}">Tahrirlash</button> <button class="mini del" data-del="${p.id}">O'chirish</button></td></tr>`).join("") + `</table></div>`;
   $("#newP").onclick = () => productForm();
@@ -156,15 +159,39 @@ function productForm(p = {}) {
       <div class="two"><label>Ombordagi soni<input name="stock" type="number" min="0" required value="${v("stock", 50)}"></label>
         <label>Ikon<select name="icon">${ICON_CHOICES.map(([k, n]) => `<option value="${k}" ${k === (p.icon || "package") ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
       <label>Orqa fon rangi<input name="color" type="color" value="${v("color", "#E6EEF0")}"></label>
+      <label>Mahsulot rasmi (JPG, PNG yoki WebP, 5 MB gacha)<input name="imageFile" type="file" accept="image/jpeg,image/png,image/webp"></label>
+      <img class="image-preview" id="imagePreview" src="${p.image ? esc(p.image) : ""}" alt="Mahsulot rasmi ko'rinishi" ${p.image ? "" : "hidden"}>
+      ${p.image ? `<label style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" name="removeImage"> Rasmni olib tashlash</label>` : ""}
       <label>Tavsif<textarea name="desc" rows="3">${v("desc")}</textarea></label>
       <label style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" name="active" ${p.active === false ? "" : "checked"}> Saytda ko'rsatilsin</label>
       <div class="err" id="pe"></div><button class="btn sun block">Saqlash</button></form>`;
   $("#modal").hidden = false;
   $("#mx").onclick = () => $("#modal").hidden = true;
+  $("#pf").imageFile.onchange = e => {
+    const file = e.target.files[0], preview = $("#imagePreview");
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
+      e.target.value = "";
+      $("#pe").textContent = "JPG, PNG yoki WebP rasm tanlang (5 MB gacha).";
+      return;
+    }
+    preview.src = URL.createObjectURL(file);
+    preview.hidden = false;
+    $("#pe").textContent = "";
+  };
   $("#pf").onsubmit = async e => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target)); f.active = e.target.active.checked;
+    delete f.imageFile;
     try {
+      const file = e.target.imageFile.files[0];
+      if (file) f.image = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Rasmni o'qib bo'lmadi."));
+        reader.readAsDataURL(file);
+      });
+      f.removeImage = !!e.target.removeImage?.checked;
       await api(p.id ? "/admin/products/" + p.id : "/admin/products", { method: p.id ? "PUT" : "POST", body: f });
       $("#modal").hidden = true; toast("Saqlandi"); render();
     } catch (err) { $("#pe").textContent = err.message; }

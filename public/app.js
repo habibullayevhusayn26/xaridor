@@ -69,7 +69,7 @@ function cardHTML(p) {
   const fav = state.favs.includes(p.id);
   return `<article class="card">
     <div class="pic" style="background:${p.color}" data-open="${p.id}">
-      <span class="badge">-${disc(p)}%</span>${ic(p.icon, 84)}
+      <span class="badge">-${disc(p)}%</span>${p.image ? `<img class="product-photo" src="${esc(p.image)}" alt="${esc(p.name)}">` : ic(p.icon, 84)}
       <button class="heart ${fav ? "on" : ""}" data-fav="${p.id}" aria-label="Sevimlilarga qo'shish">${ic("heart", 18, fav)}</button>
     </div>
     <div class="info">
@@ -129,7 +129,7 @@ function renderCart() {
   $("#cartBody").innerHTML = ids.map(id => {
     const p = byId(+id), q = state.cart[id];
     return `<div class="line-item">
-      <div class="thumb" style="background:${p.color}">${ic(p.icon, 34)}</div>
+      <div class="thumb" style="background:${p.color}">${p.image ? `<img class="product-photo" src="${esc(p.image)}" alt="${esc(p.name)}">` : ic(p.icon, 34)}</div>
       <div><div style="font-size:14px">${esc(p.name)}</div>
         <div class="qty"><button data-dec="${id}" aria-label="Kamaytirish">−</button><span>${q}</span><button data-inc="${id}" aria-label="Ko'paytirish">+</button></div></div>
       <div style="text-align:right"><b>${fmt(p.price * q)}</b><br><button class="rm" data-rm="${id}">O'chirish</button></div></div>`;
@@ -152,7 +152,7 @@ function openProduct(id, keep) {
   const p = byId(id), fav = state.favs.includes(id);
   const rel = PRODUCTS.filter(x => x.cat === p.cat && x.id !== id).slice(0, 3);
   showModal(`<div class="pd">
-    <div class="big" style="background:${p.color}">${ic(p.icon, 140)}</div>
+    <div class="big" style="background:${p.color}">${p.image ? `<img class="product-photo" src="${esc(p.image)}" alt="${esc(p.name)}">` : ic(p.icon, 140)}</div>
     <div class="form">
       <h2>${esc(p.name)}</h2>
       <div class="meta"><b>${ic("star", 13, true)} ${p.rating}</b> · ${p.sold.toLocaleString("uz-UZ")} ta sotilgan</div>
