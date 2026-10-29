@@ -37,6 +37,7 @@ Birinchi ishga tushishda 24 ta namuna mahsulot va admin akkaunt yaratiladi.
 - Admin panelda "Telegramni tekshirish" tugmasi sinov xabarini yuboradi,
   statistikada yuborilmay qolgan buyurtmalar soni ko'rinadi.
 - Admin botdagi **Foydalanuvchini qidirish** yoki **Buyurtmani qidirish** tugmasi orqali foydalanuvchini telefon/7 belgili ID bilan, buyurtmani esa `XR1234567` raqami bilan topadi. Buyurtma holatini botdagi tugmalar orqali o'zgartirish, foydalanuvchi ma'lumotlari va so'nggi buyurtmalarini ko'rish, hisobini bloklash yoki blokdan chiqarish mumkin. `/help` menyuni ko'rsatadi.
+- Foydalanuvchi parolni unutsa, saytdagi support tugmasi orqali [@habibullayev_28](https://t.me/habibullayev_28) ga murojaat qiladi. Botda foydalanuvchini topgach, admin vaqtinchalik parol berishi mumkin; asl parol ko'rinmaydi va user vaqtinchalik parol bilan kirgach yangisini o'rnatishi shart.
 - Bot qidiruviga ruxsat berilgan Telegram akkauntining ID sini `TG_ADMIN_ID` ga kiriting. Bu sozlama bo'sh bo'lsa, `TG_CHAT_ID` ishlatiladi; guruh chatidan qidiruv bajarilmaydi.
 
 ## 5. Moslash

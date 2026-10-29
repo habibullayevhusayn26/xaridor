@@ -212,9 +212,45 @@ async function openOrders() {
     : `<div class="empty"><b>Buyurtmalar yo'q</b>Birinchi buyurtmangizni bering — XARID10 promokodi bilan 10% chegirma.</div>`);
 }
 
+function requirePasswordChange() {
+  $("#modalBox").innerHTML = `<h2>Yangi parol o'rnating</h2>
+    <p class="meta" style="margin-bottom:14px">Admin bergan vaqtinchalik parol bir martalik. Davom etish uchun yangi parol o'rnating.</p>
+    <form class="form" id="requiredPasswordForm">
+      <label>Yangi parol<input name="pass" type="password" minlength="8" maxlength="100" required></label>
+      <label>Yangi parolni takrorlang<input name="confirm" type="password" minlength="8" maxlength="100" required></label>
+      <div class="err" id="requiredPasswordError"></div>
+      <button class="btn sun block" type="submit">Parolni yangilash</button>
+    </form>`;
+  $("#modal").hidden = false;
+  openOverlay();
+  $("#requiredPasswordForm").onsubmit = async e => {
+    e.preventDefault();
+    const form = new FormData(e.target);
+    const pass = form.get("pass");
+    const button = e.target.querySelector('button[type="submit"]');
+    if (pass !== form.get("confirm")) {
+      $("#requiredPasswordError").textContent = "Parollar bir xil emas.";
+      return;
+    }
+    button.disabled = true;
+    try {
+      const result = await api("/auth/change-password", { method: "POST", body: { pass } });
+      state.user = result.user;
+      store.set("user", result.user);
+      store.set("token", result.token);
+      updateBadges();
+      closeAll();
+      toast("Parol yangilandi.");
+    } catch (err) {
+      $("#requiredPasswordError").textContent = err.message;
+      button.disabled = false;
+    }
+  };
+}
+
 function openAccount(mode = "login") {
   if (state.user) {
-    showModal(`<h2>${esc(state.user.name)}</h2><p class="meta" style="margin-bottom:16px">${esc(state.user.phone)}</p>
+    showModal(`<h2>${esc(state.user.name)}</h2><p class="meta" style="margin-bottom:16px">ID: ${esc(state.user.id || "—")}<br>${esc(state.user.phone)}</p>
       <div class="form"><button class="btn dark block" id="myOrders">Buyurtmalarim</button>${state.user.role === "admin" ? `<a class="btn sun block" style="text-align:center;text-decoration:none" href="/admin.html">Admin panel</a>` : ""}<button class="btn line block" id="logout">Chiqish</button></div>`);
     return;
   }
@@ -224,6 +260,7 @@ function openAccount(mode = "login") {
       ${reg ? `<label>Ism-familiya<input name="name" required></label>` : ""}
       <label>Telefon<input name="phone" required placeholder="+998 90 123 45 67"></label>
       <label>Parol<input name="pass" type="password" required minlength="6"></label>
+      ${reg ? "" : `<a class="btn line block" href="https://t.me/habibullayev_28" target="_blank" rel="noopener noreferrer">Parolni tiklash uchun supportga yozish</a>`}
       <div class="err" id="authErr"></div>
       <button class="btn sun block" type="submit">${reg ? "Ro'yxatdan o'tish" : "Kirish"}</button>
     </form>`);
@@ -234,6 +271,10 @@ function openAccount(mode = "login") {
     try {
       const r = await api(reg ? "/auth/register" : "/auth/login", { method: "POST", body: f });
       state.user = r.user; store.set("user", r.user); store.set("token", r.token);
+      if (r.user.mustChangePassword) {
+        updateBadges();
+        return requirePasswordChange();
+      }
       updateBadges(); closeAll(); toast("Xush kelibsiz, " + r.user.name.split(" ")[0] + "!");
     } catch (err) { $("#authErr").textContent = err.message; btn.disabled = false; }
   });
@@ -319,7 +360,11 @@ async function loadProducts() {
 async function boot() {
   renderStatic(); renderHero(); updateBadges();
   if (store.get("token", null)) {
-    try { state.user = await api("/me"); store.set("user", state.user); } catch (e) { if (e.status === 401 || e.status === 403) logout(); }
+    try {
+      state.user = await api("/me");
+      store.set("user", state.user);
+      if (state.user.mustChangePassword) requirePasswordChange();
+    } catch (e) { if (e.status === 401 || e.status === 403) logout(); }
     updateBadges();
   }
   await loadProducts();

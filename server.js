@@ -178,10 +178,11 @@ async function findTelegramUser(query) {
     user,
     text: `Foydalanuvchi ma'lumotlari\nID: ${user.userCode}\nIsm: ${user.name}\nTelefon: ${user.phone}\nRol: ${user.role}\nRo'yxatdan o'tgan: ${user.created ? new Date(user.created).toLocaleString("uz-UZ") : "Noma'lum"}\nSaytdagi holati: ${user.blockedAt ? "Bloklangan" : "Faol"}\nJami buyurtmalar: ${totalOrders}\n\nBuyurtmalar:\n${orderInfo}${moreOrders}`,
     replyMarkup: {
-      inline_keyboard: [[{
-        text: user.blockedAt ? "🔓 Blokdan chiqarish" : "🚫 Saytdan bloklash",
-        callback_data: `usr:${user.userCode}:${user.blockedAt ? "unblock" : "block"}`
-      }]]
+      inline_keyboard: [
+        [{ text: "🔑 Vaqtinchalik parol berish", callback_data: `usr:${user.userCode}:reset` }],
+        [{ text: user.blockedAt ? "🔓 Blokdan chiqarish" : "🚫 Saytdan bloklash",
+          callback_data: `usr:${user.userCode}:${user.blockedAt ? "unblock" : "block"}` }]
+      ]
     }
   };
 }
@@ -221,6 +222,19 @@ async function setUserBlocked(userCode, blocked) {
   return result.matchedCount > 0;
 }
 
+async function resetUserPassword(userCode) {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const temporaryPassword = Array.from({ length: 14 }, () => alphabet[crypto.randomInt(alphabet.length)]).join("");
+  const result = await users.updateOne(
+    { userCode, role: "user" },
+    {
+      $set: { passHash: await bcrypt.hash(temporaryPassword, 10), mustChangePassword: true },
+      $inc: { tokenVersion: 1 }
+    }
+  );
+  return result.matchedCount ? temporaryPassword : null;
+}
+
 async function changeOrderStatus(id, status) {
   if (!STATUSES.includes(status)) return { error: "Noto'g'ri holat.", statusCode: 400 };
   const order = await orders.findOne({ _id: id });
@@ -240,6 +254,24 @@ async function handleTelegramCallback(callback) {
     return;
   }
   const [type, id, action] = String(callback.data || "").split(":");
+  if (type === "usr" && USER_CODE_PATTERN.test(id) && action === "reset") {
+    const temporaryPassword = await resetUserPassword(id);
+    if (!temporaryPassword) {
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Foydalanuvchi topilmadi." });
+      return;
+    }
+    await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Parol yangilandi." });
+    await telegramSend(callback.message.chat.id,
+      `Yangi vaqtinchalik parol: ${temporaryPassword}\n\nUni foydalanuvchiga maxfiy tarzda yuboring. U shu parol bilan kirgach, darhol yangisini o'rnatishi shart.`);
+    const info = await findTelegramUser(id);
+    if (info) await tgCall("editMessageText", {
+      chat_id: callback.message.chat.id,
+      message_id: callback.message.message_id,
+      text: info.text,
+      reply_markup: info.replyMarkup
+    });
+    return;
+  }
   if (type === "usr" && USER_CODE_PATTERN.test(id) && ["block", "unblock"].includes(action)) {
     const blocked = action === "block";
     const updated = await setUserBlocked(id, blocked);
@@ -361,8 +393,10 @@ async function pollTelegram() {
 }
 
 // ---- Yordamchilar ----
-const sign = u => jwt.sign({ id: String(u._id), role: u.role }, SECRET, { expiresIn: "30d" });
-const publicUser = u => ({ id: u.userCode, name: u.name, phone: u.phone, role: u.role });
+const sign = u => jwt.sign({ id: String(u._id), role: u.role, ver: u.tokenVersion || 0 }, SECRET, { expiresIn: "30d" });
+const publicUser = u => ({
+  id: u.userCode, name: u.name, phone: u.phone, role: u.role, mustChangePassword: !!u.mustChangePassword
+});
 const productOut = p => ({ id: p._id, name: p.name, cat: p.cat, price: p.price, old: p.old, rating: p.rating,
   sold: p.sold, icon: p.icon, color: p.color, image: p.image ? `/api/products/${p._id}/image` : null,
   desc: p.descr, stock: p.stock, active: !!p.active });
@@ -392,7 +426,11 @@ function auth(required = true) {
       try {
         const t = jwt.verify(h.slice(7), SECRET);
         const u = await users.findOne({ _id: new ObjectId(t.id) });
+        if (u && (t.ver || 0) !== (u.tokenVersion || 0))
+          return res.status(401).json({ error: "Sessiya muddati tugagan. Qayta kiring." });
         if (u && u.blockedAt) return res.status(403).json({ error: "Akkauntingiz bloklangan." });
+        if (u?.mustChangePassword && !["/api/me", "/api/auth/change-password"].includes(req.path))
+          return res.status(403).json({ error: "Davom etish uchun vaqtinchalik parolni yangilang." });
         if (u) req.user = u;
       } catch {}
     }
@@ -458,6 +496,25 @@ app.post("/api/auth/login", authLimiter, ah(async (req, res) => {
     return res.status(401).json({ error: "Telefon yoki parol noto'g'ri." });
   if (u.blockedAt) return res.status(403).json({ error: "Akkauntingiz bloklangan." });
   res.json({ token: sign(u), user: publicUser(u) });
+}));
+
+app.post("/api/auth/change-password", auth(), ah(async (req, res) => {
+  const pass = String(req.body.pass || "");
+  if (!req.user.mustChangePassword || req.user.role !== "user")
+    return res.status(403).json({ error: "Parolni yangilash uchun vaqtinchalik parol bilan kiring." });
+  if (pass.length < 8 || pass.length > 100)
+    return res.status(400).json({ error: "Yangi parol 8 dan 100 tagacha belgi bo'lishi kerak." });
+  const result = await users.updateOne(
+    { _id: req.user._id, mustChangePassword: true, tokenVersion: req.user.tokenVersion || 0 },
+    {
+      $set: { passHash: await bcrypt.hash(pass, 10) },
+      $unset: { mustChangePassword: "" },
+      $inc: { tokenVersion: 1 }
+    }
+  );
+  if (!result.modifiedCount) return res.status(409).json({ error: "Parol yangilanmadi. Qayta kiring." });
+  const user = await users.findOne({ _id: req.user._id });
+  res.json({ token: sign(user), user: publicUser(user) });
 }));
 
 app.get("/api/me", auth(), (req, res) => res.json(publicUser(req.user)));
