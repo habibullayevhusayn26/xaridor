@@ -319,7 +319,7 @@ async function loadProducts() {
 async function boot() {
   renderStatic(); renderHero(); updateBadges();
   if (store.get("token", null)) {
-    try { state.user = await api("/me"); store.set("user", state.user); } catch (e) { if (e.status === 401) logout(); }
+    try { state.user = await api("/me"); store.set("user", state.user); } catch (e) { if (e.status === 401 || e.status === 403) logout(); }
     updateBadges();
   }
   await loadProducts();

@@ -36,6 +36,8 @@ Birinchi ishga tushishda 24 ta namuna mahsulot va admin akkaunt yaratiladi.
   server uni belgilab qo'yadi va har daqiqada qayta yuboradi.
 - Admin panelda "Telegramni tekshirish" tugmasi sinov xabarini yuboradi,
   statistikada yuborilmay qolgan buyurtmalar soni ko'rinadi.
+- Admin botdagi **Foydalanuvchini qidirish** yoki **Buyurtmani qidirish** tugmasi orqali foydalanuvchini telefon/7 belgili ID bilan, buyurtmani esa `XR1234567` raqami bilan topadi. Buyurtma holatini botdagi tugmalar orqali o'zgartirish, foydalanuvchi ma'lumotlari va so'nggi buyurtmalarini ko'rish, hisobini bloklash yoki blokdan chiqarish mumkin. `/help` menyuni ko'rsatadi.
+- Bot qidiruviga ruxsat berilgan Telegram akkauntining ID sini `TG_ADMIN_ID` ga kiriting. Bu sozlama bo'sh bo'lsa, `TG_CHAT_ID` ishlatiladi; guruh chatidan qidiruv bajarilmaydi.
 
 ## 5. Moslash
 - Brend nomi: `public/index.html`, `public/admin.html`, `public/logo.svg`.

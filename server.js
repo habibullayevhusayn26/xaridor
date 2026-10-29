@@ -32,13 +32,20 @@ if (env("JWT_SECRET").length < 16) {
 const SECRET = env("JWT_SECRET");
 const TG_TOKEN = env("TG_BOT_TOKEN");
 const TG_CHAT = env("TG_CHAT_ID");
+const TG_ADMIN_ID = env("TG_ADMIN_ID") || TG_CHAT;
 const PORT = env("PORT") || 3000;
+const USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const USER_CODE_LETTERS = USER_CODE_ALPHABET.slice(0, -8);
+const USER_CODE_DIGITS = USER_CODE_ALPHABET.slice(-8);
+const USER_CODE_PATTERN = /^(?=.*[A-Z])(?=.*[0-9])[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{7}$/;
+const TELEGRAM_USER_BUTTON = "🔎 Foydalanuvchini qidirish";
+const TELEGRAM_ORDER_BUTTON = "📦 Buyurtmani qidirish";
 
 // ---- Telegram ----
-async function tgCall(method, payload) {
+async function tgCall(method, payload, timeout = 10000) {
   const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/${method}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload || {}), signal: AbortSignal.timeout(10000)
+    body: JSON.stringify(payload || {}), signal: AbortSignal.timeout(timeout)
   });
   const d = await r.json().catch(() => ({}));
   if (!r.ok || !d.ok) {
@@ -66,6 +73,48 @@ const fmtSum = n => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " 
 const ah = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 let db, users, products, orders, counters;
+
+function makeUserCode() {
+  const chars = [
+    ...Array.from({ length: 5 }, () => USER_CODE_ALPHABET[crypto.randomInt(USER_CODE_ALPHABET.length)]),
+    USER_CODE_LETTERS[crypto.randomInt(USER_CODE_LETTERS.length)],
+    USER_CODE_DIGITS[crypto.randomInt(USER_CODE_DIGITS.length)]
+  ];
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
+}
+
+async function nextUserCode() {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const code = makeUserCode();
+    if (!(await users.findOne({ userCode: code }, { projection: { _id: 1 } }))) return code;
+  }
+  throw new Error("Foydalanuvchi ID raqamini yaratib bo'lmadi.");
+}
+
+async function migrateUserCodes() {
+  for await (const user of users.find({ userCode: { $not: USER_CODE_PATTERN } }, { projection: { _id: 1, userCode: 1 } })) {
+    let assigned = false;
+    const filter = user.userCode
+      ? { _id: user._id, userCode: user.userCode }
+      : { _id: user._id, userCode: { $exists: false } };
+    for (let attempt = 0; attempt < 20; attempt++) {
+      try {
+        const result = await users.updateOne(filter, { $set: { userCode: await nextUserCode() } });
+        if (!result.matchedCount) { assigned = true; break; }
+        assigned = true;
+        break;
+      } catch (e) {
+        if (e.code !== 11000) throw e;
+      }
+    }
+    if (!assigned) throw new Error("Mavjud foydalanuvchiga ID berib bo'lmadi.");
+  }
+  await users.createIndex({ userCode: 1 }, { unique: true });
+}
 
 async function nextProductId() {
   const r = await counters.findOneAndUpdate({ _id: "products" }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: "after" });
@@ -95,9 +144,225 @@ async function flushTelegram() {
   }
 }
 
+const telegramSearches = new Map();
+const telegramKeyboard = {
+  keyboard: [[{ text: TELEGRAM_USER_BUTTON }, { text: TELEGRAM_ORDER_BUTTON }]],
+  resize_keyboard: true,
+  is_persistent: true
+};
+const telegramMenu = () => ({ text: "Kerakli qidiruv turini tanlang:", reply_markup: telegramKeyboard });
+const telegramSend = (chatId, text, replyMarkup = telegramKeyboard) =>
+  tgCall("sendMessage", { chat_id: chatId, text, reply_markup: replyMarkup });
+
+async function findTelegramUser(query) {
+  const phone = normPhone(query);
+  const code = query.toUpperCase();
+  if (!phone && !USER_CODE_PATTERN.test(code)) return null;
+  const user = await users.findOne(
+    { role: "user", ...(phone ? { phone } : { userCode: code }) },
+    { projection: { userCode: 1, name: 1, phone: 1, role: 1, created: 1, blockedAt: 1 } }
+  );
+  if (!user) return null;
+  const [totalOrders, recentOrders] = await Promise.all([
+    orders.countDocuments({ userId: user._id }),
+    orders.find({ userId: user._id }).sort({ created: -1 }).limit(10).toArray()
+  ]);
+  const orderInfo = recentOrders.length
+    ? recentOrders.map(order => {
+      const items = order.items.map(item => `${item.name} × ${item.q}`).join(", ").slice(0, 100);
+      return `• ${order._id} · ${order.status} · ${fmtSum(order.total)} · ${new Date(order.created).toLocaleDateString("uz-UZ")}\n  ${items}\n  ${order.city}, ${order.addr}`.slice(0, 350);
+    }).join("\n")
+    : "Buyurtmalari yo'q.";
+  const moreOrders = totalOrders > recentOrders.length ? `\nSo'nggi ${recentOrders.length} ta ko'rsatildi.` : "";
+  return {
+    user,
+    text: `Foydalanuvchi ma'lumotlari\nID: ${user.userCode}\nIsm: ${user.name}\nTelefon: ${user.phone}\nRol: ${user.role}\nRo'yxatdan o'tgan: ${user.created ? new Date(user.created).toLocaleString("uz-UZ") : "Noma'lum"}\nSaytdagi holati: ${user.blockedAt ? "Bloklangan" : "Faol"}\nJami buyurtmalar: ${totalOrders}\n\nBuyurtmalar:\n${orderInfo}${moreOrders}`,
+    replyMarkup: {
+      inline_keyboard: [[{
+        text: user.blockedAt ? "🔓 Blokdan chiqarish" : "🚫 Saytdan bloklash",
+        callback_data: `usr:${user.userCode}:${user.blockedAt ? "unblock" : "block"}`
+      }]]
+    }
+  };
+}
+
+async function findTelegramOrder(query) {
+  const id = query.trim().toUpperCase();
+  if (!/^XR\d{7}$/.test(id)) return null;
+  const order = await orders.findOne({ _id: id });
+  if (!order) return null;
+  const itemLines = order.items.map(item => `• ${item.name} × ${item.q} — ${fmtSum(item.price * item.q)}`);
+  const header = `Buyurtma ${order._id}\nHolati: ${order.status}\nSana: ${new Date(order.created).toLocaleString("uz-UZ")}\n\nMijoz: ${order.name}\nTelefon: ${order.phone}\nManzil: ${order.city}, ${order.addr}\nTo'lov: ${order.pay}${order.promo ? `\nPromokod: ${order.promo}` : ""}\n\n`;
+  let items = "";
+  let shown = 0;
+  for (const line of itemLines) {
+    if (header.length + items.length + line.length + 100 > 3900) break;
+    items += `${items ? "\n" : ""}${line}`;
+    shown++;
+  }
+  if (shown < itemLines.length) items += `\n... va yana ${itemLines.length - shown} ta mahsulot`;
+  return {
+    order,
+    text: `${header}${items}\n\nJami: ${fmtSum(order.total)}`,
+    replyMarkup: {
+      inline_keyboard: STATUSES.map((status, index) => [{
+        text: `${status === order.status ? "✅ " : ""}${status}`,
+        callback_data: `ord:${order._id}:${index}`
+      }])
+    }
+  };
+}
+
+async function setUserBlocked(userCode, blocked) {
+  const update = blocked ? { $set: { blockedAt: new Date() } } : { $unset: { blockedAt: "" } };
+  const result = await users.updateOne({
+    userCode, role: "user", blockedAt: blocked ? { $exists: false } : { $exists: true }
+  }, update);
+  return result.matchedCount > 0;
+}
+
+async function changeOrderStatus(id, status) {
+  if (!STATUSES.includes(status)) return { error: "Noto'g'ri holat.", statusCode: 400 };
+  const order = await orders.findOne({ _id: id });
+  if (!order) return { error: "Buyurtma topilmadi.", statusCode: 404 };
+  if (order.status === "Bekor qilindi" && status !== order.status)
+    return { error: "Bekor qilingan buyurtmani qayta ochib bo'lmaydi.", statusCode: 400 };
+  if (status === "Bekor qilindi" && order.status !== status)
+    for (const item of order.items)
+      await products.updateOne({ _id: item.id }, { $inc: { stock: item.q, sold: -item.q } });
+  await orders.updateOne({ _id: order._id }, { $set: { status } });
+  return { order: await orders.findOne({ _id: order._id }) };
+}
+
+async function handleTelegramCallback(callback) {
+  if (String(callback.from?.id) !== TG_ADMIN_ID || callback.message?.chat?.type !== "private") {
+    await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Ruxsat yo'q." });
+    return;
+  }
+  const [type, id, action] = String(callback.data || "").split(":");
+  if (type === "usr" && USER_CODE_PATTERN.test(id) && ["block", "unblock"].includes(action)) {
+    const blocked = action === "block";
+    const updated = await setUserBlocked(id, blocked);
+    await tgCall("answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: updated ? (blocked ? "Foydalanuvchi bloklandi." : "Blokdan chiqarildi.") : "Foydalanuvchi topilmadi."
+    });
+    if (updated && callback.message) {
+      const info = await findTelegramUser(id);
+      if (info) await tgCall("editMessageText", {
+        chat_id: callback.message.chat.id,
+        message_id: callback.message.message_id,
+        text: info.text,
+        reply_markup: info.replyMarkup
+      });
+    }
+    return;
+  }
+  if (type === "ord" && /^XR\d{7}$/.test(id) && /^\d$/.test(action) && Number(action) < STATUSES.length) {
+    const status = STATUSES[Number(action)];
+    const result = await changeOrderStatus(id, status);
+    await tgCall("answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: result.error || "Buyurtma holati yangilandi."
+    });
+    if (result.order && callback.message) {
+      const details = await findTelegramOrder(id);
+      if (details) await tgCall("editMessageText", {
+        chat_id: callback.message.chat.id,
+        message_id: callback.message.message_id,
+        text: details.text,
+        reply_markup: details.replyMarkup
+      });
+    }
+    return;
+  }
+  await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Bu tugma eskirgan." });
+}
+
+async function handleTelegramUpdate(update) {
+  if (update.callback_query) {
+    await handleTelegramCallback(update.callback_query);
+    return;
+  }
+  const message = update.message;
+  if (!message?.text || message.chat?.type !== "private") return;
+  const reply = text => telegramSend(message.chat.id, text);
+  if (String(message.from?.id) !== TG_ADMIN_ID) {
+    if (message.text.trim().startsWith("/")) await reply("Bu buyruqdan foydalanishga ruxsat yo'q.");
+    return;
+  }
+  const text = message.text.trim();
+  const match = text.match(/^\/([a-z]+)(?:@\w+)?(?:\s+([\s\S]+))?$/i);
+  const command = match?.[1].toLowerCase();
+  const inlineQuery = match?.[2]?.trim();
+  if (["start", "help"].includes(command)) {
+    telegramSearches.delete(String(message.chat.id));
+    await reply("Foydalanuvchini yoki buyurtmani qidirish uchun tugmalardan foydalaning.");
+    return;
+  }
+  if (["user", "search", "qidir"].includes(command)) {
+    telegramSearches.set(String(message.chat.id), "user");
+    if (!inlineQuery) return reply("Foydalanuvchi telefon raqami yoki 7 belgili ID sini yuboring.");
+  } else if (command === "buyurtma") {
+    telegramSearches.set(String(message.chat.id), "order");
+    if (!inlineQuery) return reply("Buyurtma raqamini yuboring. Masalan: XR1234567");
+  } else if (text === TELEGRAM_USER_BUTTON) {
+    telegramSearches.set(String(message.chat.id), "user");
+    return reply("Foydalanuvchi telefon raqami yoki 7 belgili ID sini yuboring.");
+  } else if (text === TELEGRAM_ORDER_BUTTON) {
+    telegramSearches.set(String(message.chat.id), "order");
+    return reply("Buyurtma raqamini yuboring. Masalan: XR1234567");
+  }
+  const searchType = command ? (["user", "search", "qidir"].includes(command) ? "user" : command === "buyurtma" ? "order" : null)
+    : telegramSearches.get(String(message.chat.id));
+  if (!searchType) {
+    await reply("Qidiruv turini tanlash uchun tugmalardan foydalaning.");
+    return;
+  }
+  const query = inlineQuery || text;
+  telegramSearches.delete(String(message.chat.id));
+  if (searchType === "user") {
+    const phone = normPhone(query), code = query.toUpperCase();
+    if (!phone && !USER_CODE_PATTERN.test(code)) {
+      await reply("Telefon raqami yoki 7 belgili ID noto'g'ri. Qidiruv tugmasini qayta bosing.");
+      return;
+    }
+    const result = await findTelegramUser(query);
+    await telegramSend(message.chat.id, result ? result.text : "Foydalanuvchi topilmadi.",
+      result ? result.replyMarkup : telegramKeyboard);
+    return;
+  }
+  const result = await findTelegramOrder(query);
+  await telegramSend(message.chat.id, result ? result.text : "Buyurtma topilmadi. Raqam XR1234567 ko'rinishida bo'lishi kerak.",
+    result ? result.replyMarkup : telegramKeyboard);
+}
+
+async function pollTelegram() {
+  let offset = 0;
+  while (true) {
+    try {
+      const { result } = await tgCall("getUpdates", { offset, timeout: 25, allowed_updates: ["message", "callback_query"] }, 35000);
+      for (const update of result) {
+        offset = update.update_id + 1;
+        try { await handleTelegramUpdate(update); }
+        catch (e) {
+          console.warn("Telegram buyruq bajarilmadi:", e.message);
+          if (update.callback_query) await tgCall("answerCallbackQuery", {
+            callback_query_id: update.callback_query.id,
+            text: "Xatolik yuz berdi. Qayta urinib ko'ring."
+          }).catch(error => console.warn("Telegram tugmasiga javob yuborilmadi:", error.message));
+        }
+      }
+    } catch (e) {
+      console.warn("Telegram bot buyruqlarini tekshirib bo'lmadi:", e.message);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+}
+
 // ---- Yordamchilar ----
 const sign = u => jwt.sign({ id: String(u._id), role: u.role }, SECRET, { expiresIn: "30d" });
-const publicUser = u => ({ id: String(u._id), name: u.name, phone: u.phone, role: u.role });
+const publicUser = u => ({ id: u.userCode, name: u.name, phone: u.phone, role: u.role });
 const productOut = p => ({ id: p._id, name: p.name, cat: p.cat, price: p.price, old: p.old, rating: p.rating,
   sold: p.sold, icon: p.icon, color: p.color, image: p.image ? `/api/products/${p._id}/image` : null,
   desc: p.descr, stock: p.stock, active: !!p.active });
@@ -127,6 +392,7 @@ function auth(required = true) {
       try {
         const t = jwt.verify(h.slice(7), SECRET);
         const u = await users.findOne({ _id: new ObjectId(t.id) });
+        if (u && u.blockedAt) return res.status(403).json({ error: "Akkauntingiz bloklangan." });
         if (u) req.user = u;
       } catch {}
     }
@@ -173,8 +439,15 @@ app.post("/api/auth/register", authLimiter, ah(async (req, res) => {
   if (!phone) return res.status(400).json({ error: "Telefon raqami noto'g'ri." });
   if (pass.length < 6 || pass.length > 100) return res.status(400).json({ error: "Parol kamida 6 belgi bo'lsin." });
   const doc = { name, phone, passHash: await bcrypt.hash(pass, 10), role: "user", created: new Date() };
-  try { await users.insertOne(doc); }
-  catch (e) { if (e.code === 11000) return res.status(409).json({ error: "Bu raqam ro'yxatdan o'tgan." }); throw e; }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    doc.userCode = await nextUserCode();
+    try { await users.insertOne(doc); break; }
+    catch (e) {
+      if (e.code === 11000 && e.keyPattern?.userCode && attempt < 4) continue;
+      if (e.code === 11000 && e.keyPattern?.phone) return res.status(409).json({ error: "Bu raqam ro'yxatdan o'tgan." });
+      throw e;
+    }
+  }
   res.json({ token: sign(doc), user: publicUser(doc) });
 }));
 
@@ -183,6 +456,7 @@ app.post("/api/auth/login", authLimiter, ah(async (req, res) => {
   const u = phone && await users.findOne({ phone });
   if (!u || !(await bcrypt.compare(String(req.body.pass || ""), u.passHash)))
     return res.status(401).json({ error: "Telefon yoki parol noto'g'ri." });
+  if (u.blockedAt) return res.status(403).json({ error: "Akkauntingiz bloklangan." });
   res.json({ token: sign(u), user: publicUser(u) });
 }));
 
@@ -287,15 +561,9 @@ admin.get("/orders", ah(async (req, res) =>
   res.json((await orders.find().sort({ created: -1 }).limit(500).toArray()).map(orderOut))));
 
 admin.patch("/orders/:id", ah(async (req, res) => {
-  const status = req.body.status;
-  if (!STATUSES.includes(status)) return res.status(400).json({ error: "Noto'g'ri holat." });
-  const o = await orders.findOne({ _id: req.params.id });
-  if (!o) return res.status(404).json({ error: "Buyurtma topilmadi." });
-  if (o.status === "Bekor qilindi" && status !== o.status) return res.status(400).json({ error: "Bekor qilingan buyurtmani qayta ochib bo'lmaydi." });
-  if (status === "Bekor qilindi" && o.status !== status)
-    for (const i of o.items) await products.updateOne({ _id: i.id }, { $inc: { stock: i.q, sold: -i.q } });
-  await orders.updateOne({ _id: o._id }, { $set: { status } });
-  res.json(orderOut(await orders.findOne({ _id: o._id })));
+  const result = await changeOrderStatus(req.params.id, req.body.status);
+  if (result.error) return res.status(result.statusCode).json({ error: result.error });
+  res.json(orderOut(result.order));
 }));
 
 admin.get("/products", ah(async (req, res) =>
@@ -378,6 +646,7 @@ async function main() {
   users = db.collection("users"); products = db.collection("products");
   orders = db.collection("orders"); counters = db.collection("counters");
   await users.createIndex({ phone: 1 }, { unique: true });
+  await migrateUserCodes();
   await orders.createIndex({ userId: 1, created: -1 });
   await orders.createIndex({ tgSent: 1, created: 1 });
   await products.createIndex({ active: 1, sold: -1 });
@@ -398,13 +667,14 @@ async function main() {
       process.exit(1);
     }
     await users.updateOne({ phone: ph }, { $set: { role: "admin", name: env("ADMIN_NAME") || "Admin", passHash: await bcrypt.hash(pw, 10) },
-      $setOnInsert: { created: new Date() } }, { upsert: true });
+      $setOnInsert: { created: new Date(), userCode: await nextUserCode() } }, { upsert: true });
     console.log("Admin yaratildi:", ph);
   }
 
   // 5) Yuborilmay qolgan buyurtmalarni Telegramga qayta yuborish
   flushTelegram();
   setInterval(flushTelegram, 60 * 1000).unref();
+  pollTelegram();
 
   app.listen(PORT, () => console.log(`Xaridor ishlayapti: http://localhost:${PORT}  (admin: /admin.html)`));
 }
