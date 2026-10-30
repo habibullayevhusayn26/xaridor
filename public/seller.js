@@ -8,6 +8,7 @@ const app = $("#sellerApp");
 let token = localStorage.getItem("bz_seller_token");
 let categories = [];
 let currentProduct = null;
+let sellerTelegramLinked = false;
 let products = [];
 let toastTimer;
 let googleClientId = "";
@@ -146,6 +147,7 @@ function showGoogleProfile(profile) {
 }
 
 function renderDashboard(seller) {
+  sellerTelegramLinked = seller.telegramLinked;
   if (seller.status !== "approved") {
     app.innerHTML = `<section class="seller-auth">
       <h1>${seller.status === "rejected" ? "Ariza rad etildi" : "Ariza ko'rib chiqilmoqda"}</h1>
@@ -181,6 +183,7 @@ function renderDashboard(seller) {
     </section>
     <section class="seller-panel">
       <h2 id="productFormTitle">Yangi mahsulot qo'shish</h2>
+      ${seller.telegramLinked ? "" : `<p class="seller-notice">Yangi mahsulot qo'shish uchun avval Telegram botni ulang. Botni ulash sahifaning yuqorisida.</p>`}
       <form class="form" id="sellerProductForm">
         <label>Mahsulot nomi<input name="name" maxlength="120" required></label>
         <label>Kategoriya<select name="cat" required>${categories.map(category => `<option value="${esc(category.id)}">${esc(category.name)}</option>`).join("")}</select></label>
@@ -193,7 +196,7 @@ function renderDashboard(seller) {
         <img class="image-preview" id="sellerImagePreview" alt="Rasm ko'rinishi" hidden>
         <label>Tavsif<textarea name="desc" maxlength="1000" rows="4"></textarea></label>
         <div class="err" id="sellerProductError"></div>
-        <div class="seller-form-actions"><button class="btn sun" type="submit">Mahsulotni saqlash</button><button class="btn line" id="sellerCancelEdit" type="button" hidden>Bekor qilish</button></div>
+        <div class="seller-form-actions"><button class="btn sun" type="submit" ${seller.telegramLinked ? "" : "disabled"}>Mahsulotni saqlash</button><button class="btn line" id="sellerCancelEdit" type="button" hidden>Bekor qilish</button></div>
       </form>
     </section>
     <section class="seller-panel">
@@ -344,6 +347,7 @@ function editProduct(product) {
   preview.src = product.image || "";
   preview.hidden = !product.image;
   $("#productFormTitle").textContent = "Mahsulotni tahrirlash";
+  $("#sellerProductForm").querySelector('button[type="submit"]').disabled = false;
   $("#sellerCancelEdit").hidden = false;
   form.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -355,6 +359,7 @@ function resetProductForm() {
   $("#sellerImagePreview").hidden = true;
   $("#sellerImagePreview").removeAttribute("src");
   $("#productFormTitle").textContent = "Yangi mahsulot qo'shish";
+  $("#sellerProductForm").querySelector('button[type="submit"]').disabled = !sellerTelegramLinked;
   $("#sellerCancelEdit").hidden = true;
   $("#sellerProductError").textContent = "";
 }
@@ -387,6 +392,10 @@ async function saveProduct(event) {
   const form = event.target;
   if (form.dataset.submitting) return;
   const isEditing = !!currentProduct;
+  if (!isEditing && !sellerTelegramLinked) {
+    $("#sellerProductError").textContent = "Yangi mahsulot qo'shish uchun avval Telegram botni ulang.";
+    return;
+  }
   form.dataset.submitting = "true";
   const button = form.querySelector('button[type="submit"]');
   button.disabled = true;
