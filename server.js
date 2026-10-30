@@ -79,12 +79,13 @@ const normPhone = s => {
 const fmtSum = n => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " so'm";
 const ah = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-let db, users, products, orders, counters, slides, promos;
+let db, users, products, orders, counters, slides, promos, promoUses;
 
 const promoOut = p => ({
   code: p.code, type: p.type, value: p.value, active: !!p.active,
   expiresAt: p.expiresAt || null, maxUses: p.maxUses ?? null, usedCount: p.usedCount || 0,
-  created: p.created
+  perUserLimit: p.perUserLimit ?? null, minOrderAmount: p.minOrderAmount || 0,
+  firstOrderOnly: p.firstOrderOnly || p.code === "XARID10", created: p.created
 });
 
 function readSlide(body) {
@@ -108,10 +109,20 @@ function readPromo(body) {
   const maxUses = body.maxUses === "" || body.maxUses == null ? null : Number(body.maxUses);
   if (maxUses !== null && (!Number.isSafeInteger(maxUses) || maxUses < 1))
     throw new Error("Foydalanish limiti kamida 1 bo'lishi kerak.");
+  const perUserLimit = body.perUserLimit === "" || body.perUserLimit == null ? null : Number(body.perUserLimit);
+  if (perUserLimit !== null && (!Number.isSafeInteger(perUserLimit) || perUserLimit < 1))
+    throw new Error("Har bir foydalanuvchi limiti kamida 1 bo'lishi kerak.");
+  const minOrderAmount = body.minOrderAmount === "" || body.minOrderAmount == null ? 0 : Number(body.minOrderAmount);
+  if (!Number.isSafeInteger(minOrderAmount) || minOrderAmount < 0)
+    throw new Error("Minimal xarid summasi 0 yoki undan katta butun son bo'lishi kerak.");
   const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
   if (expiresAt && !Number.isFinite(expiresAt.getTime())) throw new Error("Tugash sanasi noto'g'ri.");
   if (expiresAt && expiresAt <= new Date()) throw new Error("Tugash sanasi kelajakda bo'lishi kerak.");
-  return { code, type, value: type === "fixed" ? Math.round(value) : Math.round(value * 100) / 100, maxUses, expiresAt };
+  return {
+    code, type, value: type === "fixed" ? Math.round(value) : Math.round(value * 100) / 100,
+    maxUses, perUserLimit: code === "XARID10" ? 1 : perUserLimit,
+    minOrderAmount, expiresAt, firstOrderOnly: code === "XARID10"
+  };
 }
 
 function telegramPromoExpiry(value) {
@@ -130,6 +141,53 @@ function promoFilter(code, now = new Date()) {
       { $or: [{ maxUses: null }, { maxUses: { $exists: false } }, { $expr: { $lt: ["$usedCount", "$maxUses"] } }] }
     ]
   };
+}
+
+async function reservePromoUserUse(promo, userId) {
+  const key = `${promo.code}:${userId}`;
+  const perUserLimit = promo.code === "XARID10" ? 1 : promo.perUserLimit ?? null;
+  const existing = await promoUses.findOne({ _id: key }, { projection: { uses: 1 } });
+  if (existing) {
+    const result = await promoUses.updateOne(
+      { _id: key, ...(perUserLimit === null ? {} : { uses: { $lt: perUserLimit } }) },
+      { $inc: { uses: 1 } }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  const priorUses = await orders.countDocuments({ userId, promo: promo.code });
+  if (perUserLimit !== null && priorUses >= perUserLimit) return false;
+  try {
+    await promoUses.insertOne({ _id: key, code: promo.code, userId, uses: priorUses + 1 });
+    return true;
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    const result = await promoUses.updateOne(
+      { _id: key, ...(perUserLimit === null ? {} : { uses: { $lt: perUserLimit } }) },
+      { $inc: { uses: 1 } }
+    );
+    return result.modifiedCount > 0;
+  }
+}
+
+async function releasePromoUserUse(promo, userId) {
+  await promoUses.updateOne({ _id: `${promo.code}:${userId}`, uses: { $gt: 0 } }, { $inc: { uses: -1 } });
+}
+
+async function highestPromoUserUses(code) {
+  const [orderUses, reservedUses] = await Promise.all([
+    orders.aggregate([
+      { $match: { promo: code } },
+      { $group: { _id: "$userId", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 1 }
+    ]).toArray(),
+    promoUses.aggregate([
+      { $match: { code } },
+      { $group: { _id: null, maxUses: { $max: "$uses" } } }
+    ]).toArray()
+  ]);
+  return Math.max(orderUses[0]?.count || 0, reservedUses[0]?.maxUses || 0);
 }
 
 function readSlideImage(value) {
@@ -235,8 +293,10 @@ const telegramSend = (chatId, text, replyMarkup = telegramKeyboard) =>
 function telegramPromoDetails(p) {
   const discount = p.type === "percent" ? `${p.value}%` : fmtSum(p.value);
   const expiry = p.expiresAt ? new Date(p.expiresAt).toLocaleDateString("uz-UZ") : "muddatsiz";
-  const limit = p.maxUses == null ? "cheksiz" : `${p.usedCount || 0}/${p.maxUses}`;
-  return `${p.code} — ${discount} · ${p.active ? "faol" : "o'chirilgan"} · ${expiry} · ${limit}`;
+  const totalLimit = p.maxUses == null ? "cheksiz" : `${p.usedCount || 0}/${p.maxUses}`;
+  const userLimit = p.perUserLimit == null ? "cheksiz" : `${p.perUserLimit}/user`;
+  const threshold = p.minOrderAmount ? `xarid ≥ ${fmtSum(p.minOrderAmount)}` : "minimal xarid yo'q";
+  return `${p.code} — ${discount} · ${p.active ? "faol" : "o'chirilgan"} · jami ${totalLimit} · user ${userLimit} · ${threshold} · ${expiry}${p.firstOrderOnly || p.code === "XARID10" ? " · faqat 1-xarid" : ""}`;
 }
 
 async function showTelegramPromos(chatId, messageId) {
@@ -453,7 +513,7 @@ async function handleTelegramUpdate(update) {
   if (["start", "help"].includes(command)) {
     telegramSearches.delete(String(message.chat.id));
     telegramPromoFlows.delete(String(message.chat.id));
-    await reply("Foydalanuvchi va buyurtmalarni qidiring, promokodlarni boshqaring.\n\n/promos — kodlar ro'yxati\n/addpromo — yangi kod qo'shish\n/editpromo KOD percent|fixed MIQDOR YYYY-MM-DD|- LIMIT|- — tahrirlash\n/promo KOD on|off|delete — yoqish/o'chirish\n\nKod: KOD percent|fixed MIQDOR YYYY-MM-DD|- LIMIT|-");
+    await reply("Foydalanuvchi va buyurtmalarni qidiring, promokodlarni boshqaring.\n\n/promos — kodlar ro'yxati\n/addpromo — yangi kod qo'shish\n/editpromo KOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|- — tahrirlash\n/promo KOD on|off|delete — yoqish/o'chirish\n\nFormat: KOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|-");
     return;
   }
   if (["promos", "promokodlar"].includes(command) || text === TELEGRAM_PROMOS_BUTTON) {
@@ -464,26 +524,35 @@ async function handleTelegramUpdate(update) {
   if (["addpromo", "promokod"].includes(command) || text === TELEGRAM_ADD_PROMO_BUTTON) {
     telegramSearches.delete(String(message.chat.id));
     telegramPromoFlows.add(String(message.chat.id));
-    return reply("Yangi promokod ma'lumotlarini bitta qatorda yuboring:\nKOD percent|fixed MIQDOR YYYY-MM-DD|- LIMIT|-\nMisol: BAHOR10 percent 10 2027-03-31 100\nMuddatsiz/limitsiz bo'lsa - yozing.");
+    return reply("Yangi promokod ma'lumotlarini bitta qatorda yuboring:\nKOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|-\nMisol: BAHOR10 percent 10 2027-03-31 100 1 200000\nCheksiz limit yoki minimal xarid bo'lmasa - yozing. XARID10 faqat birinchi xaridga.");
   }
   if (command === "editpromo") {
     telegramSearches.delete(String(message.chat.id));
     telegramPromoFlows.delete(String(message.chat.id));
     const parts = (inlineQuery || "").split(/\s+/);
-    if (parts.length !== 5) return reply("Foydalanish: /editpromo KOD percent|fixed MIQDOR YYYY-MM-DD|- LIMIT|-");
-    const [code, type, rawValue, rawExpiry, rawLimit] = parts;
+    if (![5, 7].includes(parts.length)) return reply("Foydalanish: /editpromo KOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|-");
+    const [code, type, rawValue, rawExpiry, rawLimit, rawUserLimit = "-", rawMinOrder = "-"] = parts;
     const current = await promos.findOne({ code: code.toUpperCase() });
     if (!current) return reply("Promokod topilmadi.");
     const expiresAt = telegramPromoExpiry(rawExpiry);
     let updated;
     try {
-      updated = readPromo({ code, type, value: rawValue, expiresAt, maxUses: rawLimit === "-" ? null : rawLimit });
+      updated = readPromo({
+        code, type, value: rawValue, expiresAt, maxUses: rawLimit === "-" ? null : rawLimit,
+        perUserLimit: rawUserLimit === "-" ? null : rawUserLimit,
+        minOrderAmount: rawMinOrder === "-" ? 0 : rawMinOrder
+      });
     } catch (e) { return reply(e.message); }
     if (updated.maxUses !== null && updated.maxUses < (current.usedCount || 0))
       return reply("Foydalanish limiti ishlatilgan kodlar sonidan kam bo'lmasligi kerak.");
-    await promos.updateOne({ code: current.code }, {
-      $set: { type: updated.type, value: updated.value, expiresAt: updated.expiresAt, maxUses: updated.maxUses }
-    });
+    if (updated.perUserLimit !== null && code.toUpperCase() !== "XARID10" &&
+        updated.perUserLimit < await highestPromoUserUses(code.toUpperCase()))
+      return reply("Har bir user limiti oldin ishlatilgan miqdordan kam bo'lmasligi kerak.");
+    await promos.updateOne({ code: current.code }, { $set: {
+      type: updated.type, value: updated.value, expiresAt: updated.expiresAt,
+      maxUses: updated.maxUses, perUserLimit: updated.perUserLimit,
+      minOrderAmount: updated.minOrderAmount, firstOrderOnly: updated.firstOrderOnly
+    } });
     return reply(`${code.toUpperCase()} yangilandi. ${telegramPromoDetails({ ...current, ...updated })}`);
   }
   if (command === "promo") {
@@ -502,12 +571,16 @@ async function handleTelegramUpdate(update) {
   if (telegramPromoFlows.has(String(message.chat.id))) {
     telegramPromoFlows.delete(String(message.chat.id));
     const parts = text.split(/\s+/);
-    if (parts.length !== 5) return reply("Format noto'g'ri. /addpromo tugmasini bosib, 5 ta maydonni yuboring.");
-    const [code, type, rawValue, rawExpiry, rawLimit] = parts;
+    if (![5, 7].includes(parts.length)) return reply("Format noto'g'ri. /addpromo tugmasini bosib, 7 ta maydonni yuboring.");
+    const [code, type, rawValue, rawExpiry, rawLimit, rawUserLimit = "-", rawMinOrder = "-"] = parts;
     const expiresAt = telegramPromoExpiry(rawExpiry);
     let promo;
     try {
-      promo = readPromo({ code, type, value: rawValue, expiresAt, maxUses: rawLimit === "-" ? null : rawLimit });
+      promo = readPromo({
+        code, type, value: rawValue, expiresAt, maxUses: rawLimit === "-" ? null : rawLimit,
+        perUserLimit: rawUserLimit === "-" ? null : rawUserLimit,
+        minOrderAmount: rawMinOrder === "-" ? 0 : rawMinOrder
+      });
     } catch (e) { return reply(e.message); }
     if (await promos.findOne({ code: promo.code }, { projection: { _id: 1 } }))
       return reply("Bu promokod avvaldan mavjud. Boshqa kod tanlang.");
@@ -744,6 +817,13 @@ app.post("/api/orders", orderLimiter, auth(), ah(async (req, res) => {
   const promoCode = String(b.promo || "").trim().toUpperCase();
   const selectedPromo = promoCode ? await promos.findOne(promoFilter(promoCode)) : null;
   if (promoCode && !selectedPromo) return res.status(400).json({ error: "Promokod noto'g'ri, muddati tugagan yoki limiti to'lgan." });
+  const items = found.map(p => ({ id: p._id, name: p.name, icon: p.icon, q: qty.get(p._id), price: p.price }));
+  const sub = items.reduce((s, i) => s + i.price * i.q, 0);
+  if (selectedPromo?.minOrderAmount && sub < selectedPromo.minOrderAmount)
+    return res.status(400).json({ error: `Bu promokod ${fmtSum(selectedPromo.minOrderAmount)} yoki undan yuqori xaridga amal qiladi.` });
+  if ((selectedPromo?.firstOrderOnly || selectedPromo?.code === "XARID10") &&
+      await orders.countDocuments({ userId: req.user._id }) > 0)
+    return res.status(400).json({ error: "XARID10 faqat birinchi xarid uchun amal qiladi." });
 
   // Omborni kamaytirish (har biri alohida, shartli); xato bo'lsa qaytariladi
   const done = [];
@@ -758,11 +838,10 @@ app.post("/api/orders", orderLimiter, auth(), ah(async (req, res) => {
     done.push([p._id, q]);
   }
 
-  const items = found.map(p => ({ id: p._id, name: p.name, icon: p.icon, q: qty.get(p._id), price: p.price }));
-  const sub = items.reduce((s, i) => s + i.price * i.q, 0);
   const discount = selectedPromo
     ? selectedPromo.type === "percent" ? Math.round(sub * selectedPromo.value / 100) : Math.min(sub, selectedPromo.value)
     : 0;
+  let promoTotalReserved = false, promoUserReserved = false;
   if (selectedPromo) {
     let claimed;
     try { claimed = await promos.updateOne(promoFilter(selectedPromo.code), { $inc: { usedCount: 1 } }); }
@@ -770,6 +849,21 @@ app.post("/api/orders", orderLimiter, auth(), ah(async (req, res) => {
     if (!claimed.modifiedCount) {
       await rollback();
       return res.status(400).json({ error: "Promokod limiti tugadi yoki endi amal qilmaydi." });
+    }
+    promoTotalReserved = true;
+    try {
+      promoUserReserved = await reservePromoUserUse(selectedPromo, req.user._id);
+    } catch (e) {
+      await promos.updateOne({ code: selectedPromo.code, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
+      await rollback();
+      throw e;
+    }
+    if (!promoUserReserved) {
+      await promos.updateOne({ code: selectedPromo.code, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
+      await rollback();
+      return res.status(400).json({ error: selectedPromo.code === "XARID10"
+        ? "XARID10 faqat birinchi xarid uchun va bir marta ishlatiladi."
+        : "Bu promokod uchun foydalanish limitingiz tugagan." });
     }
   }
   const total = sub - discount + (sub - discount < FREE_SHIP ? SHIP : 0);
@@ -785,7 +879,9 @@ app.post("/api/orders", orderLimiter, auth(), ah(async (req, res) => {
     if (!order) throw new Error("Buyurtma raqamini yaratib bo'lmadi.");
   } catch (e) {
     await rollback();
-    if (selectedPromo) await promos.updateOne({ code: selectedPromo.code, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
+    if (selectedPromo && promoTotalReserved)
+      await promos.updateOne({ code: selectedPromo.code, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
+    if (selectedPromo && promoUserReserved) await releasePromoUserUse(selectedPromo, req.user._id);
     throw e;
   }
   sendOrderToTelegram(order).catch(e => console.warn("Telegram (qayta uriniladi):", e.message));
@@ -886,9 +982,17 @@ admin.put("/promos/:code", ah(async (req, res) => {
   if (!existing) return res.status(404).json({ error: "Promokod topilmadi." });
   if (promo.maxUses !== null && promo.maxUses < (existing.usedCount || 0))
     return res.status(400).json({ error: "Foydalanish limiti ishlatilgan kodlar sonidan kam bo'lmasligi kerak." });
+  if (promo.perUserLimit !== null && code !== "XARID10") {
+    const highestUseCount = await highestPromoUserUses(code);
+    if (promo.perUserLimit < highestUseCount)
+      return res.status(400).json({ error: "Har bir user limiti oldin ishlatilgan miqdordan kam bo'lmasligi kerak." });
+  }
   const result = await promos.findOneAndUpdate(
     { code },
-    { $set: { type: promo.type, value: promo.value, expiresAt: promo.expiresAt, maxUses: promo.maxUses } },
+    { $set: {
+      type: promo.type, value: promo.value, expiresAt: promo.expiresAt, maxUses: promo.maxUses,
+      perUserLimit: promo.perUserLimit, minOrderAmount: promo.minOrderAmount, firstOrderOnly: promo.firstOrderOnly
+    } },
     { returnDocument: "after" }
   );
   res.json(promoOut(result));
@@ -1004,7 +1108,7 @@ async function main() {
   db = client.db(env("MONGODB_DB") || "xaridor");
   users = db.collection("users"); products = db.collection("products");
   orders = db.collection("orders"); counters = db.collection("counters");
-  slides = db.collection("slides"); promos = db.collection("promos");
+  slides = db.collection("slides"); promos = db.collection("promos"); promoUses = db.collection("promoUses");
   await users.createIndex({ phone: 1 }, { unique: true });
   await migrateUserCodes();
   await orders.createIndex({ userId: 1, created: -1 });
@@ -1012,6 +1116,7 @@ async function main() {
   await products.createIndex({ active: 1, sold: -1 });
   await slides.createIndex({ created: 1 });
   await promos.createIndex({ code: 1 }, { unique: true });
+  await promoUses.createIndex({ code: 1, uses: -1 });
 
   const slideSeed = await counters.updateOne(
     { _id: "slide-seed-v1" }, { $setOnInsert: { created: new Date() } }, { upsert: true }
@@ -1023,11 +1128,14 @@ async function main() {
     { _id: "promo-seed-v1" }, { $setOnInsert: { created: new Date() } }, { upsert: true }
   );
   if (promoSeed.upsertedCount) {
-    await promos.insertMany([
-      { code: "XARID10", type: "percent", value: 10, active: true, expiresAt: null, maxUses: null, usedCount: 0, created: new Date() },
-      { code: "YANGI5", type: "percent", value: 5, active: true, expiresAt: null, maxUses: null, usedCount: 0, created: new Date() }
-    ]);
+    await promos.updateOne({ code: "XARID10" }, {
+      $setOnInsert: { code: "XARID10", type: "percent", value: 10, active: true, expiresAt: null, maxUses: null, usedCount: 0, created: new Date() }
+    }, { upsert: true });
+    await promos.updateOne({ code: "YANGI5" }, {
+      $setOnInsert: { code: "YANGI5", type: "percent", value: 5, active: true, expiresAt: null, maxUses: null, usedCount: 0, created: new Date() }
+    }, { upsert: true });
   }
+  await promos.updateOne({ code: "XARID10" }, { $set: { firstOrderOnly: true, perUserLimit: 1 } });
 
   // 3) Namuna mahsulotlar (faqat baza bo'sh bo'lsa)
   if (await products.countDocuments() === 0) {

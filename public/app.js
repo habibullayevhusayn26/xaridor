@@ -121,7 +121,8 @@ function toggleFav(id) {
 function totals() {
   const sub = Object.entries(state.cart).reduce((s, [id, q]) => s + (byId(+id) ? byId(+id).price * q : 0), 0);
   const promo = state.promoInfo?.code === state.promo ? state.promoInfo : null;
-  const d = promo ? promo.type === "percent" ? Math.round(sub * promo.value / 100) : Math.min(sub, promo.value) : 0;
+  const eligible = promo && sub >= (promo.minOrderAmount || 0);
+  const d = eligible ? promo.type === "percent" ? Math.round(sub * promo.value / 100) : Math.min(sub, promo.value) : 0;
   const ship = sub && sub - d < FREE_SHIP ? SHIP : 0;
   return { sub, d, ship, total: sub - d + ship };
 }
@@ -142,6 +143,8 @@ function renderCart() {
   const t = totals();
   $("#cartFoot").innerHTML = `
     <div class="promo"><input id="promoIn" placeholder="Promokod" value="${esc(state.promo)}"><button class="btn line" id="promoBtn">Qo'llash</button></div>
+    ${state.promoInfo?.minOrderAmount && t.sub < state.promoInfo.minOrderAmount
+      ? `<small class="meta">Promokod ${fmt(state.promoInfo.minOrderAmount)} yoki undan yuqori xaridga amal qiladi.</small>` : ""}
     <div class="row"><span>Mahsulotlar</span><span>${fmt(t.sub)}</span></div>
     ${t.d ? `<div class="row" style="color:#146c3a"><span>Chegirma</span><span>−${fmt(t.d)}</span></div>` : ""}
     <div class="row"><span>Yetkazish</span><span>${t.ship ? fmt(t.ship) : "Bepul"}</span></div>
@@ -157,7 +160,9 @@ async function applyPromo() {
   }
   try {
     state.promoInfo = await api("/promos/" + encodeURIComponent(code));
-    state.promo = state.promoInfo.code; persist(); renderCart(); toast("Promokod qo'llandi");
+    state.promo = state.promoInfo.code; persist(); renderCart();
+    toast(state.promoInfo.minOrderAmount && totals().sub < state.promoInfo.minOrderAmount
+      ? `Kamida ${fmt(state.promoInfo.minOrderAmount)} xarid qiling` : "Promokod qo'llandi");
   } catch (err) {
     toast(err.message);
   }

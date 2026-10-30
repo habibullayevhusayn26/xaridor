@@ -197,10 +197,10 @@ async function viewPromos() {
   const list = cache.promos = await api("/admin/promos");
   $("#view").innerHTML = `<div style="display:flex;justify-content:flex-end"><button class="btn dark" id="newPromo">+ Promokod qo'shish</button></div>
     <div class="panel">${list.length ? `<table><tr><th>Kod</th><th>Chegirma</th><th>Muddati</th><th>Foydalanish</th><th>Holati</th><th></th></tr>` +
-    list.map(p => `<tr class="${p.active ? "" : "off"}"><td><b>${esc(p.code)}</b></td>
-      <td>${p.type === "percent" ? `${p.value}%` : fmt(p.value)}</td>
+    list.map(p => `<tr class="${p.active ? "" : "off"}"><td><b>${esc(p.code)}</b>${p.firstOrderOnly || p.code === "XARID10" ? `<br><small class="meta">Faqat 1-xarid</small>` : ""}</td>
+      <td>${p.type === "percent" ? `${p.value}%` : fmt(p.value)}<br><small class="meta">Min: ${p.minOrderAmount ? fmt(p.minOrderAmount) : "yo'q"}</small></td>
       <td>${p.expiresAt ? new Date(p.expiresAt).toLocaleString("uz-UZ") : "Muddatsiz"}</td>
-      <td>${p.usedCount}${p.maxUses == null ? " / ∞" : " / " + p.maxUses}</td>
+      <td>Jami: ${p.usedCount}${p.maxUses == null ? " / ∞" : " / " + p.maxUses}<br><small class="meta">User: ${p.perUserLimit == null ? "∞" : p.perUserLimit}</small></td>
       <td>${p.active ? "Faol" : "O'chirilgan"}</td>
       <td style="white-space:nowrap"><button class="mini" data-promo-toggle="${esc(p.code)}">${p.active ? "O'chirish" : "Yoqish"}</button> <button class="mini" data-promo-edit="${esc(p.code)}">Tahrirlash</button> <button class="mini del" data-promo-del="${esc(p.code)}">O'chirish</button></td></tr>`).join("") + `</table>`
     : `<p class="meta">Promokodlar yo'q. Yangi kod qo'shishingiz mumkin.</p>`}</div>`;
@@ -229,10 +229,13 @@ function promoForm(promo = {}) {
     <form class="form" id="promoForm">
       <label>Kod<input name="code" required minlength="3" maxlength="24" pattern="[A-Za-z0-9_-]+" ${promo.code ? "readonly" : ""} value="${v("code")}"></label>
       <label>Chegirma turi<select name="type"><option value="percent" ${promo.type !== "fixed" ? "selected" : ""}>Foiz</option><option value="fixed" ${promo.type === "fixed" ? "selected" : ""}>So'm</option></select></label>
-      <label>Chegirma miqdori<input name="value" type="number" min="1" step="0.01" required value="${v("value")}"></label>
+      <label>Chegirma miqdori (foiz yoki so'm)<input name="value" type="number" min="1" step="0.01" required value="${v("value")}"></label>
       <label>Tugash sanasi (ixtiyoriy)<input name="expiresAt" type="datetime-local" value="${esc(expiry)}"></label>
-      <label>Foydalanish limiti (ixtiyoriy)<input name="maxUses" type="number" min="1" step="1" value="${v("maxUses")}"></label>
-      ${promo.code ? `<p class="meta">Ishlatilgan: ${promo.usedCount}${promo.maxUses == null ? "" : " / " + promo.maxUses}</p>` : ""}
+      <label>Jami foydalanish limiti (ixtiyoriy)<input name="maxUses" type="number" min="1" step="1" value="${v("maxUses")}"></label>
+      <label>Har bir user uchun limit (ixtiyoriy)<input name="perUserLimit" type="number" min="1" step="1" value="${v("perUserLimit", promo.code === "XARID10" ? 1 : "")}" ${promo.code === "XARID10" ? "readonly" : ""}></label>
+      <label>Minimal xarid summasi (0 = cheklovsiz)<input name="minOrderAmount" type="number" min="0" step="1000" value="${v("minOrderAmount", 0)}"></label>
+      ${promo.code === "XARID10" ? `<p class="meta">XARID10 faqat foydalanuvchining birinchi xaridida ishlaydi.</p>` : ""}
+      ${promo.code ? `<p class="meta">Jami ishlatilgan: ${promo.usedCount}${promo.maxUses == null ? "" : " / " + promo.maxUses}</p>` : ""}
       <div class="err" id="promoError"></div><button class="btn sun block" type="submit">Saqlash</button></form>`;
   $("#modal").hidden = false;
   $("#mx").onclick = () => $("#modal").hidden = true;
