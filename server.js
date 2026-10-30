@@ -49,6 +49,8 @@ const TELEGRAM_ADD_PROMO_BUTTON = "➕ Promokod qo'shish";
 const TELEGRAM_REPORT_BUTTON = "📊 Savdo hisoboti";
 const TELEGRAM_BROADCAST_BUTTON = "📢 Ommaviy xabar";
 const TELEGRAM_MESSAGE_STATS_BUTTON = "📈 Xabar statistikasi";
+const TELEGRAM_SELLER_PRODUCTS_BUTTON = "📦 Mahsulotlarim";
+const TELEGRAM_SELLER_HOME_BUTTON = "🏠 Asosiy menyu";
 
 // ---- Telegram ----
 async function tgCall(method, payload, timeout = 10000) {
@@ -387,6 +389,7 @@ const telegramPromoFlows = new Set();
 const telegramMessageFlows = new Map();
 const telegramBroadcastFlows = new Set();
 const telegramBroadcastDrafts = new Map();
+const telegramSellerFlows = new Map();
 const telegramKeyboard = {
   keyboard: [
     [{ text: TELEGRAM_USER_BUTTON }, { text: TELEGRAM_ORDER_BUTTON }],
@@ -397,9 +400,52 @@ const telegramKeyboard = {
   resize_keyboard: true,
   is_persistent: true
 };
+const telegramSellerKeyboard = {
+  keyboard: [[{ text: TELEGRAM_SELLER_PRODUCTS_BUTTON }], [{ text: TELEGRAM_SELLER_HOME_BUTTON }]],
+  resize_keyboard: true,
+  is_persistent: true
+};
 const telegramMenu = () => ({ text: "Kerakli qidiruv turini tanlang:", reply_markup: telegramKeyboard });
 const telegramSend = (chatId, text, replyMarkup = telegramKeyboard) =>
   tgCall("sendMessage", { chat_id: chatId, text, reply_markup: replyMarkup });
+const telegramSellerSend = (chatId, text, replyMarkup = telegramSellerKeyboard) =>
+  tgCall("sendMessage", { chat_id: chatId, text, reply_markup: replyMarkup });
+
+async function showTelegramSellerMenu(chatId, seller) {
+  return telegramSellerSend(chatId,
+    `${seller.storeName} sotuvchi kabineti\n\nBu bot orqali faqat o'z mahsulotlaringizni ko'ring va boshqaring.`,
+    telegramSellerKeyboard);
+}
+
+async function showTelegramSellerProducts(chatId, seller, messageId = null, page = 0) {
+  const pageSize = 10;
+  const total = await products.countDocuments({ sellerId: seller._id });
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  page = Math.max(0, Math.min(page, pageCount - 1));
+  const list = await products.find({ sellerId: seller._id }).sort({ _id: -1 })
+    .skip(page * pageSize).limit(pageSize).toArray();
+  const text = list.length
+    ? `${seller.storeName} — mahsulotlarim (${page + 1}/${pageCount}-sahifa):\n\n` + list.map(product =>
+      `${product.active ? "🟢 Faol" : "⚪ Yashirin"} · ${product.name}\n${fmtSum(product.price)} · Omborda: ${product.stock}`
+    ).join("\n\n")
+    : `${seller.storeName} do'konida hali mahsulot yo'q.`;
+  const keyboard = list.map(product => [
+      { text: product.active ? "Yashirish" : "Faollashtirish", callback_data: `sp:${product._id}:toggle` },
+      { text: "Tahrirlash", callback_data: `sp:${product._id}:edit` },
+      { text: "Ombor", callback_data: `sp:${product._id}:stock` }
+    ]);
+  if (page > 0 || page + 1 < pageCount)
+    keyboard.push([
+      ...(page > 0 ? [{ text: "⬅️ Oldingi", callback_data: `sp:${page - 1}:page` }] : []),
+      ...(page + 1 < pageCount ? [{ text: "Keyingi ➡️", callback_data: `sp:${page + 1}:page` }] : [])
+    ]);
+  const replyMarkup = list.length ? { inline_keyboard: keyboard } : telegramSellerKeyboard;
+  if (messageId) {
+    await tgCall("editMessageText", { chat_id: chatId, message_id: messageId, text, reply_markup });
+  } else {
+    await tgCall("sendMessage", { chat_id: chatId, text, reply_markup });
+  }
+}
 
 function telegramPeriodRange(period, now = new Date()) {
   const offset = 5 * 60 * 60 * 1000;
@@ -615,6 +661,83 @@ async function reviewSellerApplication(id, status, reviewedBy, telegramMessage =
   );
 }
 
+async function handleTelegramSellerMessage(message, seller, command, text) {
+  const chatId = String(message.chat.id);
+  const reply = text => telegramSellerSend(message.chat.id, text);
+  if (["start", "help"].includes(command) || text === TELEGRAM_SELLER_HOME_BUTTON) {
+    telegramSellerFlows.delete(chatId);
+    return showTelegramSellerMenu(message.chat.id, seller);
+  }
+  if (command === "cancel") {
+    telegramSellerFlows.delete(chatId);
+    return reply("Amal bekor qilindi.");
+  }
+  if (command === "products" || command === "mahsulotlar" || text === TELEGRAM_SELLER_PRODUCTS_BUTTON) {
+    telegramSellerFlows.delete(chatId);
+    return showTelegramSellerProducts(message.chat.id, seller);
+  }
+  const flow = telegramSellerFlows.get(chatId);
+  if (!flow || command) return reply("Kerakli amalni menyudan tanlang.");
+  if (Date.now() > flow.expiresAt) {
+    telegramSellerFlows.delete(chatId);
+    return reply("Tahrirlash muddati tugadi. Mahsulotlarim menyusidan qaytadan boshlang.");
+  }
+  const product = await products.findOne({ _id: flow.productId, sellerId: seller._id });
+  if (!product) {
+    telegramSellerFlows.delete(chatId);
+    return reply("Mahsulot topilmadi yoki sizga tegishli emas.");
+  }
+  if (flow.action === "stock") {
+    if (!/^\d{1,6}$/.test(text))
+      return reply("Ombor sonini 0 dan 999999 gacha butun son qilib yuboring. Bekor qilish: /cancel");
+    const stock = Number(text);
+    const result = await products.updateOne(
+      { _id: product._id, sellerId: seller._id },
+      { $set: { stock } }
+    );
+    if (!result.modifiedCount && product.stock !== stock)
+      return reply("Ombor sonini saqlab bo'lmadi. Qayta urinib ko'ring.");
+    telegramSellerFlows.delete(chatId);
+    return reply(`«${product.name}» ombori ${stock} taga o'zgartirildi.`);
+  }
+  if (flow.action === "edit") {
+    const fields = text.split("|").map(value => value.trim());
+    if (fields.length < 4 || !fields[0] || !fields[1] || !fields[2])
+      return reply("Format: Nomi | Narxi | Eski narxi | Tavsif\nMasalan: Telefon | 1500000 | 1700000 | Yangi model. Bekor qilish: /cancel");
+    if (!/^\d{1,12}$/.test(fields[1]) || !/^\d{1,12}$/.test(fields[2]) ||
+        !Number.isSafeInteger(Number(fields[1])) || !Number.isSafeInteger(Number(fields[2])))
+      return reply("Narxlarni musbat butun son bilan kiriting.\nFormat: Nomi | Narxi | Eski narxi | Tavsif");
+    let updatedProduct;
+    try {
+      updatedProduct = readProduct({
+        ...product,
+        name: fields[0],
+        price: fields[1],
+        old: fields[2],
+        desc: fields.slice(3).join(" | "),
+        active: product.active
+      });
+    } catch (error) {
+      return reply(`${error.message}\nQayta yuboring: Nomi | Narxi | Eski narxi | Tavsif`);
+    }
+    const result = await products.updateOne(
+      { _id: product._id, sellerId: seller._id },
+      { $set: {
+        name: updatedProduct.name,
+        price: updatedProduct.price,
+        old: updatedProduct.old,
+        descr: updatedProduct.descr
+      } }
+    );
+    if (!result.matchedCount)
+      return reply("Mahsulot o'zgarmadi yoki saqlashda xatolik yuz berdi.");
+    telegramSellerFlows.delete(chatId);
+    return reply(`«${product.name}» ma'lumotlari yangilandi.`);
+  }
+  telegramSellerFlows.delete(chatId);
+  return reply("Amal topilmadi. Mahsulotlarim menyusidan qaytadan boshlang.");
+}
+
 async function resetUserPassword(userCode) {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
   const temporaryPassword = Array.from({ length: 14 }, () => alphabet[crypto.randomInt(alphabet.length)]).join("");
@@ -665,6 +788,56 @@ async function changeOrderStatus(id, status) {
 
 async function handleTelegramCallback(callback) {
   const [type, id, action] = String(callback.data || "").split(":");
+  if (type === "sp" && (action === "page" || (/^\d+$/.test(id) && ["toggle", "edit", "stock"].includes(action)))) {
+    const chatId = String(callback.message?.chat?.id || "");
+    const seller = await sellers.findOne({ telegramChatId: chatId, status: "approved" });
+    if (!seller || String(callback.from?.id) !== String(seller.telegramChatId)) {
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Bu amal faqat mahsulot egasiga ruxsat etilgan." });
+      return;
+    }
+    if (action === "page" && /^\d+$/.test(id)) {
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id });
+      await showTelegramSellerProducts(chatId, seller, callback.message.message_id, Number(id));
+      return;
+    }
+    const productId = Number(id);
+    if (!Number.isSafeInteger(productId)) {
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Mahsulot ID noto'g'ri." });
+      return;
+    }
+    const product = await products.findOne({ _id: productId, sellerId: seller._id });
+    if (!product) {
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Mahsulot topilmadi." });
+      return;
+    }
+    if (action === "toggle") {
+      const active = !product.active;
+      const updated = await products.updateOne(
+        { _id: productId, sellerId: seller._id, active: !!product.active },
+        { $set: { active } }
+      );
+      if (!updated.modifiedCount) {
+        await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Mahsulot holati o'zgargan. Ro'yxatni yangilang." });
+        return;
+      }
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: active ? "Mahsulot faollashtirildi." : "Mahsulot yashirildi." });
+      await showTelegramSellerProducts(chatId, seller, callback.message.message_id);
+      return;
+    }
+    telegramSellerFlows.set(chatId, {
+      productId,
+      action,
+      expiresAt: Date.now() + 10 * 60 * 1000
+    });
+    await tgCall("answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: action === "edit" ? "Mahsulotni tahrirlash" : "Omborni o'zgartirish"
+    });
+    await telegramSellerSend(callback.message.chat.id, action === "edit"
+      ? `«${product.name}» ni tahrirlash uchun yuboring:\nNomi | Narxi | Eski narxi | Tavsif\nMasalan: Telefon | 1500000 | 1700000 | Yangi model\n\nBekor qilish: /cancel`
+      : `«${product.name}» uchun yangi ombor sonini yuboring (0–999999).\n\nBekor qilish: /cancel`);
+    return;
+  }
   if (type === "seller" && ObjectId.isValid(id) && ["approve", "reject"].includes(action)) {
     if (String(callback.from?.id) !== TG_ADMIN_ID || String(callback.message?.chat?.id) !== String(TG_CHAT)) {
       await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Ruxsat yo'q." });
@@ -821,8 +994,8 @@ async function handleTelegramUpdate(update) {
   const command = match?.[1].toLowerCase();
   const inlineQuery = match?.[2]?.trim();
   if (command === "start" && /^link_[a-f0-9]{48}$/.test(inlineQuery || "")) {
-    const sellerReply = text =>
-      tgCall("sendMessage", { chat_id: message.chat.id, text, reply_markup: { remove_keyboard: true } });
+    const sellerReply = (text, replyMarkup = { remove_keyboard: true }) =>
+      tgCall("sendMessage", { chat_id: message.chat.id, text, reply_markup: replyMarkup });
     const tokenHash = crypto.createHash("sha256").update(inlineQuery.slice(5)).digest("hex");
     try {
       const seller = await sellers.findOneAndUpdate(
@@ -839,14 +1012,28 @@ async function handleTelegramUpdate(update) {
         { returnDocument: "after" }
       );
       if (!seller) return sellerReply("Telegram ulash kodi eskirgan, ishlatilgan yoki sotuvchi arizasi hali tasdiqlanmagan. Saytdagi sotuvchi kabinetidan yangi havola oling.");
-      return sellerReply(`Telegram ulandi!\n${seller.storeName} do'konining yangi buyurtmalari shu chatga yuboriladi.`);
+      return sellerReply(
+        `Telegram ulandi!\n${seller.storeName} do'konining yangi buyurtmalari shu chatga yuboriladi.`,
+        telegramSellerKeyboard
+      );
     } catch (error) {
       if (error.code === 11000) return sellerReply("Bu Telegram akkaunti boshqa sotuvchiga ulangan.");
       throw error;
     }
   }
+  const linkedSeller = await sellers.findOne({
+    telegramChatId: String(message.from?.id),
+    status: "approved"
+  });
+  if (linkedSeller)
+    return handleTelegramSellerMessage(message, linkedSeller, command, text);
   if (String(message.from?.id) !== TG_ADMIN_ID) {
-    if (text.startsWith("/")) await reply("Bu buyruqdan foydalanishga ruxsat yo'q.");
+    if (text.startsWith("/"))
+      await tgCall("sendMessage", {
+        chat_id: message.chat.id,
+        text: "Bu buyruqdan foydalanishga ruxsat yo'q.",
+        reply_markup: { remove_keyboard: true }
+      });
     return;
   }
   const chatId = String(message.chat.id);

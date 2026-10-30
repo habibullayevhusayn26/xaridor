@@ -41,6 +41,7 @@ Google akkaunt emailni o'zi tekshiradi; sayt Google parolini so'ramaydi va tasdi
 
 ## 4. Telegram
 - Sotuvchi mahsuloti buyurtma qilinsa, faqat tegishli sotuvchiga; saytning o'z mahsuloti buyurtma qilinsa admin Telegramiga yuboriladi. Aralash savatda xabarlar tegishli qismlarga ajratiladi. Telegram vaqtincha ishlamasa, buyurtma yo'qolmaydi: server uni belgilab qo'yadi va har daqiqada qayta yuboradi. Sotuvchi Telegramini ulab olmaguncha uning mahsulotiga buyurtma berish bloklanadi.
+- Sotuvchi botda faqat o'ziga tegishli **Mahsulotlarim** menyusini ko'radi; admin buyruqlari va tugmalari sotuvchi chatiga yuborilmaydi. Inline tugmalar bilan mahsulotni faollashtirish/yashirish, ombor sonini va nom/narx/eski narx/tavsifni o'zgartirish mumkin. Mahsulot ro'yxati sahifalangan, tahrir uchun `Nomi | Narxi | Eski narxi | Tavsif` formatidan foydalaniladi.
 - Yangi sotuvchi arizasi `TG_CHAT_ID` chatiga inline **Tasdiqlash/Rad etish** tugmalari bilan yuboriladi va pin qilinadi. Guruhda tugmalarni ishlatish uchun `TG_ADMIN_ID` ga adminning shaxsiy Telegram ID sini yozing; botga guruhda xabar pinlash huquqini bering.
 - Admin panelda "Telegramni tekshirish" tugmasi sinov xabarini yuboradi,
   statistikada yuborilmay qolgan buyurtmalar soni ko'rinadi.
