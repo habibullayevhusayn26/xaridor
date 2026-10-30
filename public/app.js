@@ -266,17 +266,39 @@ async function openMessages() {
     const result = await api("/messages");
     $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button><h2>Xabarlar</h2>` +
       (result.messages.length ? result.messages.map(message => `
-        <article class="order ${message.read ? "" : "message-unread"}">
-          <div class="row"><b>${esc(message.title)}</b><small class="meta">${new Date(message.created).toLocaleString("uz-UZ")}</small></div>
-          <p>${esc(message.body)}</p>
+        <article class="order message-item ${message.read ? "" : "message-unread"}">
+          <button class="message-title" type="button" aria-expanded="false" aria-controls="message-body-${esc(message.id)}" data-message-open="${esc(message.id)}">
+            ${esc(message.title)}
+          </button>
+          <div class="message-body" id="message-body-${esc(message.id)}" hidden>
+            <small class="meta">${new Date(message.created).toLocaleString("uz-UZ")}</small>
+            <p>${esc(message.body)}</p>
+            <small class="err" data-message-error="${esc(message.id)}" hidden></small>
+          </div>
         </article>`).join("") : `<div class="empty"><b>Xabarlar yo'q</b>Saytdan kelgan xabarlar shu yerda ko'rinadi.</div>`);
-    if (result.messages.some(message => !message.read)) {
-      const readResult = await api("/messages/read", {
-        method: "POST", body: { ids: result.messages.filter(message => !message.read).map(message => message.id) }
-      });
-      state.unreadMessages = readResult.unreadCount;
-      updateBadges();
-    }
+    $("#modalBox").querySelectorAll("[data-message-open]").forEach(button => {
+      button.onclick = async () => {
+        const message = result.messages.find(item => item.id === button.dataset.messageOpen);
+        const body = $(`#message-body-${button.dataset.messageOpen}`, $("#modalBox"));
+        const opening = body.hidden;
+        body.hidden = !opening;
+        button.setAttribute("aria-expanded", String(opening));
+        if (!opening || message.read) return;
+        try {
+          const readResult = await api("/messages/read", {
+            method: "POST", body: { ids: [message.id] }
+          });
+          message.read = true;
+          state.unreadMessages = readResult.unreadCount;
+          button.closest(".message-item").classList.remove("message-unread");
+          updateBadges();
+        } catch (err) {
+          const error = $(`[data-message-error="${message.id}"]`, $("#modalBox"));
+          error.textContent = `O'qilgan deb belgilab bo'lmadi: ${err.message}`;
+          error.hidden = false;
+        }
+      };
+    });
   } catch (err) {
     $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button><h2>Xabarlar</h2><p class="err">${esc(err.message)}</p>`;
   }
@@ -327,7 +349,7 @@ function openAccount(mode = "login") {
   openOverlay();
   if (state.user) {
     $("#accountBody").innerHTML = `<h2>${esc(state.user.name)}</h2><p class="meta" style="margin-bottom:16px">ID: ${esc(state.user.id || "—")}<br>${esc(state.user.phone)}</p>
-      <div class="form"><button class="btn dark block" id="myOrders">Buyurtmalarim</button>${state.user.role === "admin" ? `<a class="btn sun block" style="text-align:center;text-decoration:none" href="/admin.html">Admin panel</a>` : ""}<button class="btn line block" id="logout">Chiqish</button></div>`;
+      <div class="form"><button class="btn dark block" id="myOrders">Buyurtmalarim</button><button class="btn line block" id="accountMessages">Xabarlar${state.unreadMessages ? ` (${state.unreadMessages})` : ""}</button>${state.user.role === "admin" ? `<a class="btn sun block" style="text-align:center;text-decoration:none" href="/admin.html">Admin panel</a>` : ""}<button class="btn line block" id="logout">Chiqish</button></div>`;
     return;
   }
   const reg = mode === "reg";
@@ -401,7 +423,7 @@ document.addEventListener("click", e => {
   if (t.id === "promoBtn") return applyPromo();
   if (t.id === "checkoutBtn") return openCheckout();
   if (t.id === "seeOrders" || t.id === "myOrders") return openOrders();
-  if (t.id === "messagesBtn") return openMessages();
+  if (t.id === "messagesBtn" || t.id === "accountMessages") return openMessages();
   if (t.id === "logout") {
     $("#accountBody").innerHTML = `<p style="margin-bottom:14px">Hisobdan chiqishni tasdiqlaysizmi?</p>
       <div class="form"><button class="btn sun block" id="confirmLogout">Ha</button><button class="btn line block" id="cancelLogout">Yo'q</button></div>`;

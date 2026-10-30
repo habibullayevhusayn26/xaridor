@@ -132,6 +132,10 @@ html.overlay-open{overflow:hidden}
 .tabs button.on{background:var(--teal);color:#fff}
 .order{border:1.5px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
 .message-unread{border-left:4px solid var(--teal)}
+.message-title{display:block;width:100%;text-align:left;font-weight:600}
+.message-unread .message-title::after{content:"Yangi";float:right;color:var(--teal);font-size:12px}
+.message-body{padding-top:10px}
+.message-body p{margin-top:6px;white-space:pre-wrap}
 .status{display:inline-block;background:#DFF3E7;color:#146c3a;font-size:12px;font-weight:600;padding:2px 9px;border-radius:8px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 20px;border-radius:12px;z-index:90}
 .toast.notification{left:auto;right:24px;bottom:24px;transform:none;width:min(360px,calc(100vw - 32px));padding:38px 18px 18px 50px;border:1px solid rgba(255,255,255,.14);border-radius:16px;background:#fff;color:var(--ink);box-shadow:0 12px 36px rgba(10,25,30,.24);animation:notification-in .24s ease-out}
