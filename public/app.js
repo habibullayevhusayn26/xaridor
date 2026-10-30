@@ -95,11 +95,14 @@ function cardHTML(p) {
       <button class="heart ${fav ? "on" : ""}" data-fav="${p.id}" aria-label="Sevimlilarga qo'shish">${ic("heart", 18, fav)}</button>
     </div>
     <div class="info">
+      <div class="price-block">
+        <div class="price">${fmt(p.price)}</div>
+        ${hasDiscount(p) ? `<div class="old">${fmt(p.old)}</div>` : ""}
+      </div>
+      <div class="inst">Oyiga ${fmt(p.price / 12)} dan · 12 oy</div>
       <div class="name" data-open="${p.id}">${esc(p.name)}</div>
       ${p.sellerStoreName ? `<div class="seller-byline">Sotuvchi: <b>${esc(p.sellerStoreName)}</b></div>` : ""}
       <div class="meta"><b>${ic("star", 13, true)} ${p.rating}</b> · ${p.sold.toLocaleString("uz-UZ")} ta sotilgan</div>
-      <div class="price">${fmt(p.price)}${hasDiscount(p) ? `<span class="old">${fmt(p.old)}</span>` : ""}</div>
-      <div class="inst">Oyiga ${fmt(p.price / 12)} dan · 12 oy</div>
       <button class="add" data-add="${p.id}" ${p.stock <= 0 ? "disabled" : ""}>${p.stock <= 0 ? "Tugagan" : "Savatga"}</button>
     </div></article>`;
 }
