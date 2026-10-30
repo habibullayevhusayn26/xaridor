@@ -943,7 +943,19 @@ function readSellerProfile(body, defaultName) {
 }
 const productOut = p => ({ id: p._id, name: p.name, cat: p.cat, price: p.price, old: p.old, rating: p.rating,
   sold: p.sold, icon: p.icon, color: p.color, image: p.image ? `/api/products/${p._id}/image` : null,
-  desc: p.descr, stock: p.stock, active: !!p.active });
+  desc: p.descr, stock: p.stock, active: !!p.active, sellerStoreName: p.sellerStoreName || null });
+async function publicProductListOut(list) {
+  const sellerIds = [...new Map(list.filter(product => product.sellerId && !product.sellerStoreName)
+    .map(product => [String(product.sellerId), product.sellerId])).values()];
+  const storeNames = sellerIds.length
+    ? new Map((await sellers.find({ _id: { $in: sellerIds } }, { projection: { storeName: 1 } }).toArray())
+      .map(seller => [String(seller._id), seller.storeName]))
+    : new Map();
+  return list.map(product => ({
+    ...productOut(product),
+    sellerStoreName: product.sellerStoreName || storeNames.get(String(product.sellerId)) || null
+  }));
+}
 const orderOut = o => ({ id: o._id, name: o.name, phone: o.phone, city: o.city, addr: o.addr, pay: o.pay,
   total: o.total, promo: o.promo, status: o.status, items: o.items, created: o.created.toISOString(), tgSent: !!o.tgSent });
 
@@ -1031,7 +1043,7 @@ app.get("/api/promos/:code", ah(async (req, res) => {
   res.json(promoOut(promo));
 }));
 app.get("/api/products", ah(async (req, res) =>
-  res.json((await products.find({ active: true }).sort({ sold: -1 }).toArray()).map(productOut))));
+  res.json(await publicProductListOut(await products.find({ active: true }).sort({ sold: -1 }).toArray()))));
 app.get("/api/products/:id/reviews", auth(false), ah(async (req, res) => {
   const productId = Number(req.params.id);
   if (!Number.isSafeInteger(productId)) return res.status(404).json({ error: "Mahsulot topilmadi." });
@@ -1639,6 +1651,7 @@ sellerRouter.post("/products", ah(async (req, res) => {
   } catch (error) { return res.status(400).json({ error: error.message }); }
   const doc = {
     _id: await nextProductId(), ...product, active: true, sellerId: req.user._id,
+    sellerStoreName: req.user.storeName,
     ...(image ? { image } : {}), rating: 0, sold: 0, created: new Date()
   };
   await products.insertOne(doc);

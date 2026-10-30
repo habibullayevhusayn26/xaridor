@@ -91,6 +91,7 @@ function cardHTML(p) {
     </div>
     <div class="info">
       <div class="name" data-open="${p.id}">${esc(p.name)}</div>
+      ${p.sellerStoreName ? `<div class="seller-byline">Sotuvchi: <b>${esc(p.sellerStoreName)}</b></div>` : ""}
       <div class="meta"><b>${ic("star", 13, true)} ${p.rating}</b> · ${p.sold.toLocaleString("uz-UZ")} ta sotilgan</div>
       <div class="price">${fmt(p.price)}<span class="old">${fmt(p.old)}</span></div>
       <div class="inst">Oyiga ${fmt(p.price / 12)} dan · 12 oy</div>
@@ -240,6 +241,7 @@ function openProduct(id, keep) {
     <div class="big" style="background:${p.color}">${p.image ? `<img class="product-photo" src="${esc(p.image)}" alt="${esc(p.name)}">` : ic(p.icon, 140)}</div>
     <div class="form">
       <h2>${esc(p.name)}</h2>
+      ${p.sellerStoreName ? `<div class="seller-byline">Sotuvchi: <b>${esc(p.sellerStoreName)}</b></div>` : ""}
       <div class="meta"><b>${ic("star", 13, true)} ${p.rating}</b> · ${p.sold.toLocaleString("uz-UZ")} ta sotilgan</div>
       <div class="price" style="font-size:26px">${fmt(p.price)}<span class="old">${fmt(p.old)}</span></div>
       <div class="inst">Oyiga ${fmt(p.price / 12)} dan · 12 oy</div>
