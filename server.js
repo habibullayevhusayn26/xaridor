@@ -50,6 +50,8 @@ const TELEGRAM_REPORT_BUTTON = "📊 Savdo hisoboti";
 const TELEGRAM_BROADCAST_BUTTON = "📢 Ommaviy xabar";
 const TELEGRAM_MESSAGE_STATS_BUTTON = "📈 Xabar statistikasi";
 const TELEGRAM_SELLER_PRODUCTS_BUTTON = "📦 Mahsulotlarim";
+const TELEGRAM_SELLER_PRODUCT_SEARCH_BUTTON = "🔎 Mahsulot ID";
+const TELEGRAM_SELLER_ORDER_SEARCH_BUTTON = "🧾 Buyurtma ID";
 const TELEGRAM_SELLER_HOME_BUTTON = "🏠 Asosiy menyu";
 
 // ---- Telegram ----
@@ -401,7 +403,11 @@ const telegramKeyboard = {
   is_persistent: true
 };
 const telegramSellerKeyboard = {
-  keyboard: [[{ text: TELEGRAM_SELLER_PRODUCTS_BUTTON }], [{ text: TELEGRAM_SELLER_HOME_BUTTON }]],
+  keyboard: [
+    [{ text: TELEGRAM_SELLER_PRODUCTS_BUTTON }],
+    [{ text: TELEGRAM_SELLER_PRODUCT_SEARCH_BUTTON }, { text: TELEGRAM_SELLER_ORDER_SEARCH_BUTTON }],
+    [{ text: TELEGRAM_SELLER_HOME_BUTTON }]
+  ],
   resize_keyboard: true,
   is_persistent: true
 };
@@ -426,7 +432,7 @@ async function showTelegramSellerProducts(chatId, seller, messageId = null, page
     .skip(page * pageSize).limit(pageSize).toArray();
   const text = list.length
     ? `${seller.storeName} — mahsulotlarim (${page + 1}/${pageCount}-sahifa):\n\n` + list.map(product =>
-      `${product.active ? "🟢 Faol" : "⚪ Yashirin"} · ${product.name}\n${fmtSum(product.price)} · Omborda: ${product.stock}`
+      `ID: ${product._id} · ${product.active ? "🟢 Faol" : "⚪ Yashirin"} · ${product.name}\n${fmtSum(product.price)} · Omborda: ${product.stock}`
     ).join("\n\n")
     : `${seller.storeName} do'konida hali mahsulot yo'q.`;
   const keyboard = list.map(product => [
@@ -445,6 +451,112 @@ async function showTelegramSellerProducts(chatId, seller, messageId = null, page
   } else {
     await tgCall("sendMessage", { chat_id: chatId, text, reply_markup });
   }
+}
+
+async function showTelegramSellerProduct(chatId, seller, product, messageId = null) {
+  const category = CATEGORIES.find(item => item.id === product.cat)?.name || product.cat;
+  const text = `Mahsulot: ${product.name}\nID: ${product._id}\nHolat: ${product.active ? "Faol" : "Yashirin"}\nKategoriya: ${category}\nNarx: ${fmtSum(product.price)}\nEski narx: ${fmtSum(product.old)}\nOmbor: ${product.stock}\nRasm: ${product.image ? "Mavjud" : "Yo'q"}\n\nIzoh:\n${product.descr || "Kiritilmagan"}`;
+  const replyMarkup = { inline_keyboard: [
+    [{ text: product.active ? "Yashirish" : "Faollashtirish", callback_data: `sp:${product._id}:toggle` }],
+    [{ text: "Barcha ma'lumotni tahrirlash", callback_data: `sp:${product._id}:edit` }],
+    [{ text: "Rasmni almashtirish", callback_data: `sp:${product._id}:image` }],
+    [{ text: "Omborni o'zgartirish", callback_data: `sp:${product._id}:stock` }]
+  ] };
+  if (messageId) {
+    await tgCall("editMessageText", { chat_id: chatId, message_id: messageId, text, reply_markup });
+  } else {
+    await tgCall("sendMessage", { chat_id: chatId, text, reply_markup });
+  }
+}
+
+async function findSellerOrder(seller, orderId) {
+  const order = await orders.findOne({ _id: orderId });
+  if (!order) return null;
+  const legacyItems = order.items.filter(item => !item.sellerId);
+  let ownedIds = new Set();
+  if (legacyItems.length) {
+    const owned = await products.find({
+      _id: { $in: legacyItems.map(item => item.id) }, sellerId: seller._id
+    }, { projection: { _id: 1 } }).toArray();
+    ownedIds = new Set(owned.map(product => product._id));
+  }
+  const sellerItems = order.items.filter(item =>
+    String(item.sellerId || "") === String(seller._id) || ownedIds.has(item.id)
+  );
+  return sellerItems.length ? { order, items: sellerItems } : null;
+}
+
+function sellerOrderDetails(seller, result) {
+  const { order, items } = result;
+  const itemText = items.map(item =>
+    `• ${item.name} × ${item.q} — ${fmtSum(item.price * item.q)}`
+  ).join("\n");
+  return {
+    text: `Buyurtma ${order._id}\nDo'kon: ${seller.storeName}\nUmumiy holati: ${order.status}\n\nMijoz: ${order.name}\nTelefon: ${order.phone}\nManzil: ${order.city}, ${order.addr}\nTo'lov: ${order.pay}\n\nSizning mahsulotlaringiz:\n${itemText}\n\nEslatma: status o'zgarsa butun buyurtmaga ta'sir qiladi.`,
+    replyMarkup: {
+      inline_keyboard: STATUSES.map((status, index) => [{
+        text: `${order.status === status ? "✅ " : ""}${status}`,
+        callback_data: `so:${order._id}:${index}`
+      }])
+    }
+  };
+}
+
+function sellerOrderOut(order, items) {
+  return {
+    id: order._id,
+    name: order.name,
+    phone: order.phone,
+    city: order.city,
+    addr: order.addr,
+    pay: order.pay,
+    total: items.reduce((sum, item) => sum + item.price * item.q, 0),
+    status: order.status,
+    created: order.created.toISOString(),
+    items: items.map(({ id, name, icon, q, price }) => ({ id, name, icon, q, price }))
+  };
+}
+
+async function showTelegramSellerOrder(chatId, seller, orderId, messageId = null) {
+  const found = await findSellerOrder(seller, orderId);
+  const text = found
+    ? sellerOrderDetails(seller, found)
+    : { text: "Bu ID bo'yicha sizga tegishli buyurtma topilmadi.", replyMarkup: telegramSellerKeyboard };
+  if (messageId) {
+    await tgCall("editMessageText", {
+      chat_id: chatId, message_id: messageId, text: text.text, reply_markup: text.replyMarkup
+    });
+  } else {
+    await tgCall("sendMessage", { chat_id: chatId, ...text });
+  }
+}
+
+async function telegramSellerProductImage(message) {
+  const photo = message.photo?.[message.photo.length - 1];
+  const document = message.document;
+  const fileId = photo?.file_id || document?.file_id;
+  if (!fileId) throw new Error("Rasm sifatida JPG, PNG yoki WebP yuboring.");
+  if (document && !["image/jpeg", "image/png", "image/webp"].includes(document.mime_type))
+    throw new Error("JPG, PNG yoki WebP rasm yuboring.");
+  if ((photo?.file_size || document?.file_size || 0) > MAX_PRODUCT_IMAGE_BYTES)
+    throw new Error("Rasm hajmi 5 MB dan oshmasligi kerak.");
+  const file = await tgCall("getFile", { file_id: fileId });
+  if (!file.result?.file_path) throw new Error("Telegram rasm faylini topib bo'lmadi.");
+  const response = await fetch(`https://api.telegram.org/file/bot${TG_TOKEN}/${file.result.file_path}`, {
+    signal: AbortSignal.timeout(10000)
+  });
+  if (!response.ok) throw new Error("Telegram rasm faylini yuklab bo'lmadi.");
+  if (Number(response.headers.get("content-length")) > MAX_PRODUCT_IMAGE_BYTES)
+    throw new Error("Rasm hajmi 5 MB dan oshmasligi kerak.");
+  const data = Buffer.from(await response.arrayBuffer());
+  if (!data.length || data.length > MAX_PRODUCT_IMAGE_BYTES)
+    throw new Error("Rasm hajmi 5 MB dan oshmasligi kerak.");
+  let contentType;
+  if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) contentType = "image/jpeg";
+  else if (data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) contentType = "image/png";
+  else if (data.toString("ascii", 0, 4) === "RIFF" && data.toString("ascii", 8, 12) === "WEBP") contentType = "image/webp";
+  else throw new Error("Rasm faylining formati noto'g'ri.");
+  return readProductImage(`data:${contentType};base64,${data.toString("base64")}`);
 }
 
 function telegramPeriodRange(period, now = new Date()) {
@@ -676,11 +788,47 @@ async function handleTelegramSellerMessage(message, seller, command, text) {
     telegramSellerFlows.delete(chatId);
     return showTelegramSellerProducts(message.chat.id, seller);
   }
+  const productSearch = ["product", "mahsulot"].includes(command) || text === TELEGRAM_SELLER_PRODUCT_SEARCH_BUTTON;
+  const orderSearch = ["order", "buyurtma"].includes(command) || text === TELEGRAM_SELLER_ORDER_SEARCH_BUTTON;
+  if (productSearch || orderSearch) {
+    const action = productSearch ? "searchProduct" : "searchOrder";
+    if (message.text && command && message.text.trim().split(/\s+/).length > 1) {
+      const id = message.text.trim().split(/\s+/).slice(1).join(" ");
+      if (action === "searchProduct") {
+        if (!/^\d{1,12}$/.test(id)) return reply("Mahsulot ID raqamini yuboring.");
+        const product = await products.findOne({ _id: Number(id), sellerId: seller._id });
+        if (!product) return reply("Bu ID bo'yicha sizga tegishli mahsulot topilmadi.");
+        telegramSellerFlows.delete(chatId);
+        return showTelegramSellerProduct(message.chat.id, seller, product);
+      }
+      const orderId = id.toUpperCase();
+      if (!/^XR\d{7}$/.test(orderId)) return reply("Buyurtma ID XR1234567 ko'rinishida yuboring.");
+      telegramSellerFlows.delete(chatId);
+      return showTelegramSellerOrder(message.chat.id, seller, orderId);
+    }
+    telegramSellerFlows.set(chatId, { action, expiresAt: Date.now() + 10 * 60 * 1000 });
+    return reply(action === "searchProduct"
+      ? "Mahsulot ID raqamini yuboring. Bekor qilish: /cancel"
+      : "Buyurtma ID sini XR1234567 ko'rinishida yuboring. Bekor qilish: /cancel");
+  }
   const flow = telegramSellerFlows.get(chatId);
   if (!flow || command) return reply("Kerakli amalni menyudan tanlang.");
   if (Date.now() > flow.expiresAt) {
     telegramSellerFlows.delete(chatId);
     return reply("Tahrirlash muddati tugadi. Mahsulotlarim menyusidan qaytadan boshlang.");
+  }
+  if (flow.action === "searchProduct") {
+    if (!/^\d{1,12}$/.test(text)) return reply("Mahsulot ID raqamini butun son ko'rinishida yuboring.");
+    const found = await products.findOne({ _id: Number(text), sellerId: seller._id });
+    telegramSellerFlows.delete(chatId);
+    if (!found) return reply("Bu ID bo'yicha sizga tegishli mahsulot topilmadi.");
+    return showTelegramSellerProduct(message.chat.id, seller, found);
+  }
+  if (flow.action === "searchOrder") {
+    const orderId = text.toUpperCase();
+    if (!/^XR\d{7}$/.test(orderId)) return reply("Buyurtma ID XR1234567 ko'rinishida yuboring.");
+    telegramSellerFlows.delete(chatId);
+    return showTelegramSellerOrder(message.chat.id, seller, orderId);
   }
   const product = await products.findOne({ _id: flow.productId, sellerId: seller._id });
   if (!product) {
@@ -700,32 +848,51 @@ async function handleTelegramSellerMessage(message, seller, command, text) {
     telegramSellerFlows.delete(chatId);
     return reply(`«${product.name}» ombori ${stock} taga o'zgartirildi.`);
   }
+  if (flow.action === "image") {
+    if (!message.photo?.length && !message.document)
+      return reply("Mahsulot uchun JPG, PNG yoki WebP rasm yuboring. Bekor qilish: /cancel");
+    let image;
+    try { image = await telegramSellerProductImage(message); }
+    catch (error) { return reply(`${error.message}\nBoshqa rasm yuboring yoki /cancel bosing.`); }
+    const result = await products.updateOne(
+      { _id: product._id, sellerId: seller._id },
+      { $set: { image } }
+    );
+    if (!result.matchedCount) return reply("Mahsulot topilmadi yoki rasm saqlanmadi.");
+    telegramSellerFlows.delete(chatId);
+    return reply(`«${product.name}» rasmi yangilandi.`);
+  }
   if (flow.action === "edit") {
     const fields = text.split("|").map(value => value.trim());
-    if (fields.length < 4 || !fields[0] || !fields[1] || !fields[2])
-      return reply("Format: Nomi | Narxi | Eski narxi | Tavsif\nMasalan: Telefon | 1500000 | 1700000 | Yangi model. Bekor qilish: /cancel");
-    if (!/^\d{1,12}$/.test(fields[1]) || !/^\d{1,12}$/.test(fields[2]) ||
-        !Number.isSafeInteger(Number(fields[1])) || !Number.isSafeInteger(Number(fields[2])))
-      return reply("Narxlarni musbat butun son bilan kiriting.\nFormat: Nomi | Narxi | Eski narxi | Tavsif");
+    if (fields.length < 6 || !fields[0] || !fields[1] || !fields[2] || !fields[3] || !fields[4])
+      return reply("Format: Nomi | Kategoriya ID | Narxi | Eski narxi | Ombor | Tavsif\nBekor qilish: /cancel");
+    if (!/^\d{1,12}$/.test(fields[2]) || !/^\d{1,12}$/.test(fields[3]) ||
+        !/^\d{1,6}$/.test(fields[4]) ||
+        !Number.isSafeInteger(Number(fields[2])) || !Number.isSafeInteger(Number(fields[3])))
+      return reply("Narx va omborni butun son bilan kiriting.\nFormat: Nomi | Kategoriya ID | Narxi | Eski narxi | Ombor | Tavsif");
     let updatedProduct;
     try {
       updatedProduct = readProduct({
         ...product,
         name: fields[0],
-        price: fields[1],
-        old: fields[2],
-        desc: fields.slice(3).join(" | "),
+        cat: fields[1],
+        price: fields[2],
+        old: fields[3],
+        stock: fields[4],
+        desc: fields.slice(5).join(" | "),
         active: product.active
       });
     } catch (error) {
-      return reply(`${error.message}\nQayta yuboring: Nomi | Narxi | Eski narxi | Tavsif`);
+      return reply(`${error.message}\nQayta yuboring: Nomi | Kategoriya ID | Narxi | Eski narxi | Ombor | Tavsif`);
     }
     const result = await products.updateOne(
       { _id: product._id, sellerId: seller._id },
       { $set: {
         name: updatedProduct.name,
+        cat: updatedProduct.cat,
         price: updatedProduct.price,
         old: updatedProduct.old,
+        stock: updatedProduct.stock,
         descr: updatedProduct.descr
       } }
     );
@@ -788,7 +955,7 @@ async function changeOrderStatus(id, status) {
 
 async function handleTelegramCallback(callback) {
   const [type, id, action] = String(callback.data || "").split(":");
-  if (type === "sp" && (action === "page" || (/^\d+$/.test(id) && ["toggle", "edit", "stock"].includes(action)))) {
+  if (type === "sp" && (action === "page" || (/^\d+$/.test(id) && ["toggle", "edit", "stock", "image"].includes(action)))) {
     const chatId = String(callback.message?.chat?.id || "");
     const seller = await sellers.findOne({ telegramChatId: chatId, status: "approved" });
     if (!seller || String(callback.from?.id) !== String(seller.telegramChatId)) {
@@ -821,7 +988,20 @@ async function handleTelegramCallback(callback) {
         return;
       }
       await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: active ? "Mahsulot faollashtirildi." : "Mahsulot yashirildi." });
-      await showTelegramSellerProducts(chatId, seller, callback.message.message_id);
+      const updatedProduct = await products.findOne({ _id: productId, sellerId: seller._id });
+      if (updatedProduct)
+        await showTelegramSellerProduct(chatId, seller, updatedProduct, callback.message.message_id);
+      else
+        await showTelegramSellerProducts(chatId, seller, callback.message.message_id);
+      return;
+    }
+    if (action === "image") {
+      telegramSellerFlows.set(chatId, {
+        productId, action, expiresAt: Date.now() + 10 * 60 * 1000
+      });
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Rasm yuboring." });
+      await telegramSellerSend(callback.message.chat.id,
+        `«${product.name}» uchun JPG, PNG yoki WebP rasm yuboring (5 MB gacha).\nBekor qilish: /cancel`);
       return;
     }
     telegramSellerFlows.set(chatId, {
@@ -834,8 +1014,28 @@ async function handleTelegramCallback(callback) {
       text: action === "edit" ? "Mahsulotni tahrirlash" : "Omborni o'zgartirish"
     });
     await telegramSellerSend(callback.message.chat.id, action === "edit"
-      ? `«${product.name}» ni tahrirlash uchun yuboring:\nNomi | Narxi | Eski narxi | Tavsif\nMasalan: Telefon | 1500000 | 1700000 | Yangi model\n\nBekor qilish: /cancel`
+      ? `«${product.name}» ni tahrirlash uchun quyidagi formatda yuboring:\nNomi | Kategoriya ID | Narxi | Eski narxi | Ombor | Tavsif\nKategoriya ID: ${CATEGORIES.map(category => `${category.id} (${category.name})`).join(", ")}\n\nBekor qilish: /cancel`
       : `«${product.name}» uchun yangi ombor sonini yuboring (0–999999).\n\nBekor qilish: /cancel`);
+    return;
+  }
+  if (type === "so" && /^XR\d{7}$/.test(id) && /^\d$/.test(action) && Number(action) < STATUSES.length) {
+    const chatId = String(callback.message?.chat?.id || "");
+    const seller = await sellers.findOne({ telegramChatId: chatId, status: "approved" });
+    if (!seller || String(callback.from?.id) !== String(seller.telegramChatId)) {
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Bu amal faqat buyurtmadagi sotuvchiga ruxsat etilgan." });
+      return;
+    }
+    const found = await findSellerOrder(seller, id);
+    if (!found) {
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Buyurtma topilmadi yoki sizga tegishli emas." });
+      return;
+    }
+    const result = await changeOrderStatus(id, STATUSES[Number(action)]);
+    await tgCall("answerCallbackQuery", {
+      callback_query_id: callback.id, text: result.error || "Butun buyurtma holati yangilandi."
+    });
+    if (result.order && callback.message)
+      await showTelegramSellerOrder(chatId, seller, id, callback.message.message_id);
     return;
   }
   if (type === "seller" && ObjectId.isValid(id) && ["approve", "reject"].includes(action)) {
@@ -987,9 +1187,9 @@ async function handleTelegramUpdate(update) {
     return;
   }
   const message = update.message;
-  if (!message?.text || message.chat?.type !== "private") return;
+  if (!message || message.chat?.type !== "private") return;
   const reply = text => telegramSend(message.chat.id, text);
-  const text = message.text.trim();
+  const text = String(message.text || "").trim();
   const match = text.match(/^\/([a-z]+)(?:@\w+)?(?:\s+([\s\S]+))?$/i);
   const command = match?.[1].toLowerCase();
   const inlineQuery = match?.[2]?.trim();
@@ -1988,6 +2188,30 @@ admin.delete("/products/:id", ah(async (req, res) => {
 const sellerRouter = express.Router();
 sellerRouter.use(auth(), sellerOnly);
 sellerRouter.get("/me", (req, res) => res.json(sellerOut(req.user)));
+sellerRouter.get("/orders/:id", ah(async (req, res) => {
+  if (req.user.status !== "approved")
+    return res.status(403).json({ error: "Sotuvchi akkauntingiz faol emas." });
+  const orderId = String(req.params.id || "").trim().toUpperCase();
+  if (!/^XR\d{7}$/.test(orderId))
+    return res.status(400).json({ error: "Buyurtma ID XR1234567 ko'rinishida bo'lishi kerak." });
+  const result = await findSellerOrder(req.user, orderId);
+  if (!result) return res.status(404).json({ error: "Sizga tegishli buyurtma topilmadi." });
+  res.json(sellerOrderOut(result.order, result.items));
+}));
+sellerRouter.patch("/orders/:id/status", ah(async (req, res) => {
+  if (req.user.status !== "approved")
+    return res.status(403).json({ error: "Sotuvchi akkauntingiz faol emas." });
+  const orderId = String(req.params.id || "").trim().toUpperCase();
+  if (!/^XR\d{7}$/.test(orderId))
+    return res.status(400).json({ error: "Buyurtma ID XR1234567 ko'rinishida bo'lishi kerak." });
+  if (!STATUSES.includes(req.body.status))
+    return res.status(400).json({ error: "Buyurtma holati noto'g'ri." });
+  const ownership = await findSellerOrder(req.user, orderId);
+  if (!ownership) return res.status(404).json({ error: "Sizga tegishli buyurtma topilmadi." });
+  const result = await changeOrderStatus(orderId, req.body.status);
+  if (result.error) return res.status(result.statusCode).json({ error: result.error });
+  res.json(sellerOrderOut(result.order, ownership.items));
+}));
 sellerRouter.post("/telegram-link", ah(async (req, res) => {
   if (req.user.status !== "approved")
     return res.status(403).json({ error: "Telegram botni faqat tasdiqlangan sotuvchi ulay oladi." });
@@ -2032,16 +2256,31 @@ sellerRouter.post("/products", ah(async (req, res) => {
 sellerRouter.put("/products/:id", ah(async (req, res) => {
   if (req.user.status !== "approved")
     return res.status(403).json({ error: "Sotuvchi akkauntingiz faol emas." });
+  const current = await products.findOne({ _id: Number(req.params.id), sellerId: req.user._id });
+  if (!current) return res.status(404).json({ error: "Mahsulot topilmadi." });
   let product, image;
   try {
-    product = readProduct({ ...req.body, active: true });
+    product = readProduct({ ...req.body, active: req.body.active ?? current.active });
     if (req.body.image) image = readProductImage(req.body.image);
   } catch (error) { return res.status(400).json({ error: error.message }); }
   const removeImage = req.body.removeImage === true || req.body.removeImage === "true";
-  const update = { $set: { ...product, active: true }, ...(image ? {} : removeImage ? { $unset: { image: "" } } : {}) };
+  const update = { $set: { ...product }, ...(image ? {} : removeImage ? { $unset: { image: "" } } : {}) };
   if (image) update.$set.image = image;
   const result = await products.findOneAndUpdate(
     { _id: Number(req.params.id), sellerId: req.user._id }, update, { returnDocument: "after" }
+  );
+  if (!result) return res.status(404).json({ error: "Mahsulot topilmadi." });
+  res.json(productOut(result));
+}));
+sellerRouter.patch("/products/:id/status", ah(async (req, res) => {
+  if (req.user.status !== "approved")
+    return res.status(403).json({ error: "Sotuvchi akkauntingiz faol emas." });
+  if (typeof req.body.active !== "boolean")
+    return res.status(400).json({ error: "Mahsulot holati noto'g'ri." });
+  const result = await products.findOneAndUpdate(
+    { _id: Number(req.params.id), sellerId: req.user._id },
+    { $set: { active: req.body.active } },
+    { returnDocument: "after" }
   );
   if (!result) return res.status(404).json({ error: "Mahsulot topilmadi." });
   res.json(productOut(result));

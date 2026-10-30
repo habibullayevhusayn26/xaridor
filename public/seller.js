@@ -172,6 +172,14 @@ function renderDashboard(seller) {
       <div class="err" id="sellerTelegramError" role="alert"></div>
     </section>`}
     <section class="seller-panel">
+      <h2>Buyurtmani ID orqali boshqarish</h2>
+      <form class="seller-search-row" id="sellerOrderSearchForm">
+        <input name="orderId" aria-label="Buyurtma ID" placeholder="XR1234567" pattern="XR[0-9]{7}" required>
+        <button class="btn sun" type="submit">Qidirish</button>
+      </form>
+      <div id="sellerOrderResult"></div>
+    </section>
+    <section class="seller-panel">
       <h2 id="productFormTitle">Yangi mahsulot qo'shish</h2>
       <form class="form" id="sellerProductForm">
         <label>Mahsulot nomi<input name="name" maxlength="120" required></label>
@@ -189,7 +197,11 @@ function renderDashboard(seller) {
       </form>
     </section>
     <section class="seller-panel">
-      <h2>Mahsulotlarim</h2><div id="sellerProducts"><p class="meta">Yuklanmoqda...</p></div>
+      <h2>Mahsulotlarim</h2>
+      <label class="seller-id-search">Mahsulot ID bo'yicha qidirish
+        <input id="sellerProductSearch" inputmode="numeric" placeholder="Masalan: 1024">
+      </label>
+      <div id="sellerProducts"><p class="meta">Yuklanmoqda...</p></div>
     </section>
   </div>`;
   $("#sellerLogout").onclick = logout;
@@ -216,6 +228,8 @@ function renderDashboard(seller) {
   $("#sellerCancelEdit").onclick = () => resetProductForm();
   $("#sellerProductForm").imageFile.onchange = showImagePreview;
   $("#sellerProductForm").onsubmit = saveProduct;
+  $("#sellerProductSearch").oninput = renderProducts;
+  $("#sellerOrderSearchForm").onsubmit = searchSellerOrder;
   loadProducts();
 }
 
@@ -229,21 +243,37 @@ async function loadProducts() {
 }
 
 function renderProducts() {
-  $("#sellerProducts").innerHTML = products.length
-    ? `<div class="seller-products">${products.map(product => `<article class="seller-product">
+  const query = $("#sellerProductSearch").value.trim();
+  const visibleProducts = query
+    ? products.filter(product => String(product.id) === query)
+    : products;
+  $("#sellerProducts").innerHTML = visibleProducts.length
+    ? `<div class="seller-products">${visibleProducts.map(product => `<article class="seller-product">
         <div class="seller-product-image">${product.image
           ? `<img src="${esc(product.image)}" alt="${esc(product.name)}">`
           : ic("package", 36)}</div>
-        <div class="seller-product-info"><b>${esc(product.name)}</b><span>${fmt(product.price)}</span>
+        <div class="seller-product-info"><b>${esc(product.name)}</b><small class="meta">ID: ${product.id}</small><span>${fmt(product.price)}</span>
           <small class="meta">Omborda: ${product.stock} · ${esc((categories.find(category => category.id === product.cat) || {}).name || product.cat)}</small></div>
-        <div class="seller-product-actions"><button class="mini" data-product-edit="${product.id}">Tahrirlash</button>
+        <div class="seller-product-actions"><button class="mini" data-product-status="${product.id}" data-active="${!product.active}">${product.active ? "Yashirish" : "Faollashtirish"}</button>
+          <button class="mini" data-product-edit="${product.id}">Tahrirlash</button>
           <button class="mini del" data-product-delete="${product.id}">O'chirish</button></div>
       </article>`).join("")}</div>`
-    : `<p class="meta">Hali mahsulot qo'shilmagan.</p>`;
+    : `<p class="meta">${query ? "Bu ID bo'yicha mahsulot topilmadi." : "Hali mahsulot qo'shilmagan."}</p>`;
   $("#sellerProducts").onclick = async event => {
     const edit = event.target.closest("[data-product-edit]");
     const remove = event.target.closest("[data-product-delete]");
+    const status = event.target.closest("[data-product-status]");
     if (edit) editProduct(products.find(product => product.id === Number(edit.dataset.productEdit)));
+    if (status) {
+      status.disabled = true;
+      try {
+        await api(`/seller/products/${encodeURIComponent(status.dataset.productStatus)}/status`, {
+          method: "PATCH", body: { active: status.dataset.active === "true" }
+        });
+        await loadProducts();
+        toast(status.dataset.active === "true" ? "Mahsulot faollashtirildi." : "Mahsulot yashirildi.");
+      } catch (error) { toast(error.message); status.disabled = false; }
+    }
     if (remove && confirm("Mahsulotni o'chirasizmi?")) {
       remove.disabled = true;
       try {
@@ -251,6 +281,56 @@ function renderProducts() {
         await loadProducts();
         toast("Mahsulot o'chirildi.");
       } catch (error) { toast(error.message); remove.disabled = false; }
+    }
+  };
+}
+
+async function searchSellerOrder(event) {
+  event.preventDefault();
+  const form = event.target;
+  const input = form.elements.orderId;
+  const button = form.querySelector('button[type="submit"]');
+  const result = $("#sellerOrderResult");
+  button.disabled = true;
+  result.innerHTML = `<p class="meta">Buyurtma qidirilmoqda...</p>`;
+  try {
+    const order = await api(`/seller/orders/${encodeURIComponent(input.value.trim().toUpperCase())}`);
+    renderSellerOrder(order);
+  } catch (error) {
+    result.innerHTML = `<p class="err" role="alert">${esc(error.message)}</p>`;
+  } finally { button.disabled = false; }
+}
+
+function renderSellerOrder(order) {
+  const statuses = ["Qabul qilindi", "Yig'ilmoqda", "Yo'lda", "Yetkazildi", "Bekor qilindi"];
+  const result = $("#sellerOrderResult");
+  result.innerHTML = `<article class="seller-order">
+    <h3>Buyurtma ${esc(order.id)}</h3>
+    <p><b>Holati:</b> ${esc(order.status)} · <b>Jami:</b> ${fmt(order.total)}</p>
+    <p><b>Mijoz:</b> ${esc(order.name)} · ${esc(order.phone)}<br>
+      <b>Manzil:</b> ${esc(order.city)}, ${esc(order.addr)}<br><b>To'lov:</b> ${esc(order.pay)}</p>
+    <ul>${order.items.map(item => `<li>${esc(item.name)} × ${item.q} — ${fmt(item.price * item.q)}</li>`).join("")}</ul>
+    <p class="seller-notice">Status o'zgartirilganda butun buyurtmaning, jumladan boshqa sotuvchilarga tegishli mahsulotlar holati ham o'zgaradi.</p>
+    <form class="seller-search-row" id="sellerOrderStatusForm">
+      <label>Yangi holat<select name="status">${statuses.map(status => `<option value="${esc(status)}" ${order.status === status ? "selected" : ""}>${esc(status)}</option>`).join("")}</select></label>
+      <button class="btn sun" type="submit">Holatni saqlash</button>
+    </form>
+    <div class="err" id="sellerOrderStatusError" role="alert"></div>
+  </article>`;
+  $("#sellerOrderStatusForm").onsubmit = async event => {
+    event.preventDefault();
+    const form = event.target;
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    try {
+      const updated = await api(`/seller/orders/${encodeURIComponent(order.id)}/status`, {
+        method: "PATCH", body: { status: form.elements.status.value }
+      });
+      renderSellerOrder(updated);
+      toast("Buyurtma holati yangilandi.");
+    } catch (error) {
+      $("#sellerOrderStatusError").textContent = error.message;
+      button.disabled = false;
     }
   };
 }
