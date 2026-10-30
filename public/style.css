@@ -117,6 +117,7 @@ html.overlay-open{overflow:hidden}
 .foot{background:var(--teal-d);color:#cfe6e4;padding:30px 0;font-size:14px}
 .foot .wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px}
 .foot b{color:#fff;display:block;margin-bottom:6px}
+.foot a{color:#fff}
 
 .overlay{position:fixed;inset:0;background:rgba(10,25,30,.5);z-index:40}
 .drawer{position:fixed;top:0;right:0;bottom:0;width:min(430px,100%);background:#fff;z-index:50;display:flex;flex-direction:column;animation:slide .22s ease-out}
