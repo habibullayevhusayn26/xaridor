@@ -159,6 +159,27 @@ html.overlay-open{overflow:hidden}
 .review-stars{color:#d99300;letter-spacing:1px}
 .review-form{margin-top:16px}
 .review-notice{margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff8e6;color:var(--ink)}
+.seller-page{padding-top:28px;padding-bottom:48px}
+.seller-page-title{flex:1;font-family:Unbounded,sans-serif;font-size:16px;font-weight:600}
+.seller-auth,.seller-panel{max-width:760px;margin:0 auto 18px;padding:24px;background:#fff;border:1px solid var(--line);border-radius:var(--r)}
+.seller-auth h1,.seller-dashboard h1{font-size:24px;margin-bottom:8px}
+.seller-auth>.meta{margin-bottom:18px}
+.seller-notice{margin:14px 0;padding:12px 14px;border:1px solid #f1d27b;border-radius:10px;background:#fff8e6}
+.seller-dashboard{display:grid;gap:16px}
+.seller-dashboard-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 22px;background:#fff;border:1px solid var(--line);border-radius:var(--r)}
+.seller-panel{max-width:none;margin:0}
+.seller-panel h2{margin-bottom:16px}
+.seller-panel .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.seller-form-actions{display:flex;gap:10px;flex-wrap:wrap}
+.seller-products{display:grid;gap:10px}
+.seller-product{display:flex;align-items:center;gap:14px;padding:12px;border:1px solid var(--line);border-radius:12px}
+.seller-product-image{display:grid;place-items:center;flex:none;width:64px;height:64px;overflow:hidden;border-radius:10px;background:var(--bg);color:var(--teal)}
+.seller-product-image img{width:100%;height:100%;object-fit:cover}
+.seller-product-info{display:grid;gap:3px;flex:1;min-width:0}
+.seller-product-actions{display:flex;gap:6px;flex-wrap:wrap}
+.seller-product-actions .mini{padding:7px 10px;border:1.5px solid var(--sun);border-radius:8px;background:#fff;color:var(--ink);font-weight:600}
+.seller-product-actions .mini:hover{background:#fff8e6}
+.seller-product-actions .mini.del{border-color:var(--coral);color:var(--coral)}
 .message-unread{border-left:4px solid var(--teal)}
 .message-title{display:block;width:100%;text-align:left;font-weight:600}
 .message-unread .message-title::after{content:"Yangi";float:right;color:var(--teal);font-size:12px}
@@ -186,6 +207,12 @@ html.overlay-open{overflow:hidden}
   .grid{grid-template-columns:repeat(2,1fr);gap:10px}.pic{height:150px;font-size:64px}.filters input{width:48%}
   .dots{bottom:4px;gap:4px}.dots button{width:6px;height:6px}.dots button.on{width:16px}
   .toast.notification{right:12px;bottom:12px;width:min(360px,calc(100vw - 24px))}
+  .seller-auth,.seller-panel{padding:18px}
+  .seller-dashboard-head{align-items:flex-start;padding:15px}
+  .seller-dashboard-head .meta{overflow-wrap:anywhere}
+  .seller-panel .two{grid-template-columns:1fr}
+  .seller-product{align-items:flex-start;flex-wrap:wrap}
+  .seller-product-actions{width:100%;padding-left:78px}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 

@@ -18,15 +18,23 @@ cp .env.example .env      # Windows: copy .env.example .env
 npm start
 ```
 Sayt: http://localhost:3000 · Admin: http://localhost:3000/admin.html
+Sotuvchi kabineti: http://localhost:3000/seller.html
 
 `MONGODB_URI`, `JWT_SECRET`, `TG_BOT_TOKEN`, `TG_CHAT_ID` bo'lmasa server ishga tushmaydi.
 Birinchi ishga tushishda 24 ta namuna mahsulot va admin akkaunt yaratiladi.
+
+Sotuvchi kabinetida Google orqali kirish ishlashi uchun Google OAuth Client ID kerak.
+Google Cloud Console'da OAuth Client ID (Web application) yarating, saytingiz manzilini
+**Authorized JavaScript origins** ga kiriting (`http://localhost:3000` lokal sinov uchun),
+so'ng Client ID'ni `.env` yoki hosting Environment bo'limidagi `GOOGLE_CLIENT_ID` ga yozing.
+Google akkaunt emailni o'zi tekshiradi; sayt Google parolini so'ramaydi va tasdiqlash kodini emailga yubormaydi.
 
 ## 3. Render ga qo'yish
 1. Loyihani GitHub ga yuklang (`.env` ni yuklamang, `.gitignore` da bor).
 2. Render > New > Web Service > repozitoriyni tanlang.
    Build Command: `npm install` · Start Command: `npm start`
 3. *Environment* bo'limiga `.env.example` dagi hamma qiymatlarni kiriting.
+   `GOOGLE_CLIENT_ID` ni yaratilgan OAuth Web Client ID bilan to'ldiring.
 4. Baza Atlas da turgani uchun Render da disk kerak emas.
 5. Bepul tarifda sayt 15 daqiqa so'rovsiz qolsa uxlaydi. UptimeRobot / cron-job.org dan
    `https://SAYT.onrender.com/api/health` manziliga har 10 daqiqada so'rov yuboring.
@@ -43,6 +51,7 @@ Birinchi ishga tushishda 24 ta namuna mahsulot va admin akkaunt yaratiladi.
 - Bot qidiruviga ruxsat berilgan Telegram akkauntining ID sini `TG_ADMIN_ID` ga kiriting. Bu sozlama bo'sh bo'lsa, `TG_CHAT_ID` ishlatiladi; guruh chatidan qidiruv bajarilmaydi.
 
 ## 5. Moslash
+- Sotuvchilar `/seller.html` sahifasida Google orqali kiradi; yangi sotuvchi do'kon ma'lumotlarini to'ldirib ariza yuboradi. Google emailni tasdiqlaydi, admin paneldagi **Sotuvchilar** bo'limida admin arizani faollashtiradi; tasdiqlangan sotuvchilar mahsulot qo'shishi mumkin va mahsulotlar do'konda darhol ko'rinadi.
 - Banner slaydlari admin panelning **Slaydlar** bo'limida boshqariladi; JPG, PNG yoki WebP (5 MB gacha) yuklash mumkin.
 - Promokodlar admin panelning **Promokodlar** bo'limida ham boshqariladi. Foizli yoki belgilangan summadagi chegirma, tugash sanasi, jami va foydalanuvchi boshiga limit hamda minimal savdo summasi sozlanadi.
 - Faqat akkauntiga tegishli buyurtmada mahsulot bor va buyurtma holati **Yetkazildi** bo'lgan foydalanuvchi baho va sharh yubora oladi. Sharh admin paneldagi **Sharhlar** bo'limida tasdiqlangandan keyin ommaga ko'rinadi. Bir foydalanuvchi har bir mahsulotga bitta sharh qoldiradi.

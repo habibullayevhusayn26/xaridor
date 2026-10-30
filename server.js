@@ -6,6 +6,7 @@ const express = require("express");
 const { MongoClient, ObjectId } = require("mongodb");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { OAuth2Client } = require("google-auth-library");
 const rateLimit = require("express-rate-limit");
 
 // ---- .env (lokal ishga tushirish uchun; hostingda Environment ishlatiladi) ----
@@ -34,6 +35,8 @@ const TG_TOKEN = env("TG_BOT_TOKEN");
 const TG_CHAT = env("TG_CHAT_ID");
 const TG_ADMIN_ID = env("TG_ADMIN_ID") || TG_CHAT;
 const PORT = env("PORT") || 3000;
+const GOOGLE_CLIENT_ID = env("GOOGLE_CLIENT_ID");
+const googleOAuthClient = new OAuth2Client(GOOGLE_CLIENT_ID || undefined);
 const USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const USER_CODE_LETTERS = USER_CODE_ALPHABET.slice(0, -8);
 const USER_CODE_DIGITS = USER_CODE_ALPHABET.slice(-8);
@@ -80,9 +83,12 @@ const normPhone = s => {
   return /^\+?998\d{9}$/.test(d) ? "+" + d.replace("+", "") : null;
 };
 const fmtSum = n => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " so'm";
+const htmlEscape = value => String(value).replace(/[&<>"']/g, character => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[character]));
 const ah = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-let db, users, products, orders, counters, slides, promos, promoUses, messages, reviews, messageCampaigns;
+let db, users, sellers, products, orders, counters, slides, promos, promoUses, messages, reviews, messageCampaigns;
 
 const promoOut = p => ({
   code: p.code, type: p.type, value: p.value, active: !!p.active,
@@ -919,6 +925,22 @@ const sign = u => jwt.sign({ id: String(u._id), role: u.role, ver: u.tokenVersio
 const publicUser = u => ({
   id: u.userCode, name: u.name, phone: u.phone, role: u.role, mustChangePassword: !!u.mustChangePassword
 });
+const sellerOut = seller => ({
+  id: String(seller._id), name: seller.name, phone: seller.phone, email: seller.email,
+  storeName: seller.storeName, address: seller.address, status: seller.status,
+  emailVerified: !!seller.emailVerifiedAt
+});
+function readSellerProfile(body, defaultName) {
+  const name = String(body.name || defaultName || "").trim().slice(0, 80);
+  const phone = normPhone(body.phone);
+  const storeName = String(body.storeName || "").trim().slice(0, 100);
+  const address = String(body.address || "").trim().slice(0, 250);
+  if (name.length < 2) throw new Error("Ism-familiyani kiriting.");
+  if (!phone) throw new Error("Telefon raqami noto'g'ri.");
+  if (!storeName) throw new Error("Do'kon nomini kiriting.");
+  if (address.length < 5) throw new Error("Do'kon manzilini to'liq kiriting.");
+  return { name, phone, storeName, address };
+}
 const productOut = p => ({ id: p._id, name: p.name, cat: p.cat, price: p.price, old: p.old, rating: p.rating,
   sold: p.sold, icon: p.icon, color: p.color, image: p.image ? `/api/products/${p._id}/image` : null,
   desc: p.descr, stock: p.stock, active: !!p.active });
@@ -947,7 +969,12 @@ function auth(required = true) {
     if (h.startsWith("Bearer ")) {
       try {
         const t = jwt.verify(h.slice(7), SECRET);
-        const u = await users.findOne({ _id: new ObjectId(t.id) });
+        const isSellerToken = t.role === "seller";
+        if (isSellerToken && !req.originalUrl.startsWith("/api/seller/")) {
+          if (required) return res.status(403).json({ error: "Bu sahifaga sotuvchi akkaunti bilan kirib bo'lmaydi." });
+          return next();
+        }
+        const u = await (isSellerToken ? sellers : users).findOne({ _id: new ObjectId(t.id) });
         if (u && (t.ver || 0) !== (u.tokenVersion || 0))
           return res.status(401).json({ error: "Sessiya muddati tugagan. Qayta kiring." });
         if (u && u.blockedAt) return res.status(403).json({ error: "Akkauntingiz bloklangan." });
@@ -962,6 +989,8 @@ function auth(required = true) {
 }
 const adminOnly = (req, res, next) =>
   req.user && req.user.role === "admin" ? next() : res.status(403).json({ error: "Ruxsat yo'q." });
+const sellerOnly = (req, res, next) =>
+  req.user && req.user.role === "seller" ? next() : res.status(403).json({ error: "Sotuvchi akkaunti talab qilinadi." });
 
 // ---- Express ----
 const app = express();
@@ -974,6 +1003,8 @@ app.use((req, res, next) => {
 });
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false,
   message: { error: "Juda ko'p urinish. 15 daqiqadan keyin qayta urinib ko'ring." } });
+const sellerAuthLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false,
+  message: { error: "Juda ko'p urinish. Bir soatdan keyin qayta urinib ko'ring." } });
 const orderLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false,
   message: { error: "Juda ko'p buyurtma. Keyinroq urinib ko'ring." } });
 
@@ -1079,6 +1110,83 @@ app.get("/api/products/:id/image", ah(async (req, res) => {
   if (!p || !p.image) return res.status(404).end();
   res.set({ "Content-Type": p.image.contentType, "Cache-Control": "no-cache" });
   res.send(Buffer.from(p.image.data, "base64"));
+}));
+
+app.get("/api/seller/google-config", (req, res) => {
+  if (!GOOGLE_CLIENT_ID) return res.status(503).json({ error: "Google orqali kirish sozlanmagan." });
+  res.json({ clientId: GOOGLE_CLIENT_ID });
+});
+
+app.post("/api/seller/google", sellerAuthLimiter, ah(async (req, res) => {
+  if (!GOOGLE_CLIENT_ID) return res.status(503).json({ error: "Google orqali kirish sozlanmagan." });
+  const credential = typeof req.body.credential === "string" ? req.body.credential : "";
+  if (!credential || credential.length > 10000)
+    return res.status(400).json({ error: "Google tokeni noto'g'ri." });
+  let googleUser;
+  try {
+    const ticket = await googleOAuthClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+    const payload = ticket.getPayload();
+    if (!payload?.sub || !payload.email || payload.email_verified !== true)
+      return res.status(401).json({ error: "Google akkaunt emaili tasdiqlanmagan." });
+    googleUser = {
+      sub: payload.sub,
+      email: payload.email.trim().toLowerCase(),
+      name: String(payload.name || "").trim().slice(0, 80)
+    };
+  } catch {
+    return res.status(401).json({ error: "Google orqali tasdiqlash amalga oshmadi. Qayta urinib ko'ring." });
+  }
+
+  let seller = await sellers.findOne({ email: googleUser.email });
+  const profileSubmitted = req.body.profileSubmitted === true;
+  if (!seller) {
+    if (!profileSubmitted) {
+      return res.json({
+        needsProfile: true, email: googleUser.email, name: googleUser.name
+      });
+    }
+    let profile;
+    try { profile = readSellerProfile(req.body, googleUser.name); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
+    const doc = {
+      _id: new ObjectId(), role: "seller", ...profile, email: googleUser.email,
+      googleSub: googleUser.sub, emailVerifiedAt: new Date(),
+      status: "pending", tokenVersion: 0, created: new Date()
+    };
+    try {
+      await sellers.insertOne(doc);
+      seller = doc;
+    } catch (error) {
+      if (error.code === 11000)
+        return res.status(409).json({ error: "Bu telefon raqami allaqachon sotuvchi akkauntida ishlatilgan." });
+      throw error;
+    }
+    tgCall("sendMessage", {
+      chat_id: TG_CHAT,
+      text: `Yangi sotuvchi ro'yxatdan o'tdi.\nDo'kon: ${seller.storeName}\nIsm: ${seller.name}\nEmail: ${seller.email}\nTelefon: ${seller.phone}\nHolat: Google orqali tasdiqlangan, admin ko'rib chiqishi kutilmoqda.`
+    }).catch(error => console.warn("Telegramga sotuvchi xabari yuborilmadi:", error.message));
+    const token = jwt.sign({ id: String(seller._id), role: "seller", ver: seller.tokenVersion || 0 }, SECRET, { expiresIn: "30d" });
+    return res.status(201).json({ token, seller: sellerOut(seller) });
+  } else {
+    if (seller.googleSub && seller.googleSub !== googleUser.sub)
+      return res.status(401).json({ error: "Google akkaunt mos kelmadi." });
+    let updates = {};
+    if (!seller.googleSub) updates.googleSub = googleUser.sub;
+    if (!seller.emailVerifiedAt) updates.emailVerifiedAt = new Date();
+    if (!seller.phone || !seller.storeName || !seller.address) {
+      if (!profileSubmitted)
+        return res.json({ needsProfile: true, email: seller.email, name: seller.name || googleUser.name });
+      try { updates = { ...updates, ...readSellerProfile(req.body, googleUser.name) }; }
+      catch (error) { return res.status(400).json({ error: error.message }); }
+    }
+    if (Object.keys(updates).length) {
+      await sellers.updateOne({ _id: seller._id }, { $set: updates });
+      seller = { ...seller, ...updates };
+    }
+  }
+
+  const token = jwt.sign({ id: String(seller._id), role: "seller", ver: seller.tokenVersion || 0 }, SECRET, { expiresIn: "30d" });
+  res.json({ token, seller: sellerOut(seller) });
 }));
 
 app.post("/api/auth/register", authLimiter, ah(async (req, res) => {
@@ -1257,6 +1365,26 @@ app.post("/api/messages/read", auth(), ah(async (req, res) => {
 // ---- Admin ----
 const admin = express.Router();
 admin.use(auth(), adminOnly);
+
+admin.get("/sellers", ah(async (req, res) => {
+  const list = await sellers.find({ status: "pending" }).sort({ created: 1 }).limit(200).toArray();
+  res.json(list.map(sellerOut));
+}));
+
+admin.patch("/sellers/:id", ah(async (req, res) => {
+  if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Sotuvchi ID noto'g'ri." });
+  if (!["approved", "rejected"].includes(req.body.status))
+    return res.status(400).json({ error: "Sotuvchi holati noto'g'ri." });
+  const selector = { _id: new ObjectId(req.params.id), status: "pending" };
+  if (req.body.status === "approved") selector.emailVerifiedAt = { $exists: true, $ne: null };
+  const result = await sellers.findOneAndUpdate(
+    selector,
+    { $set: { status: req.body.status, reviewedAt: new Date(), reviewedBy: req.user._id } },
+    { returnDocument: "after" }
+  );
+  if (!result) return res.status(409).json({ error: "Sotuvchi topilmadi yoki email hali tasdiqlanmagan." });
+  res.json(sellerOut(result));
+}));
 
 admin.get("/stats", ah(async (req, res) => {
   const tz = 5 * 3600e3; // Toshkent UTC+5
@@ -1495,6 +1623,53 @@ admin.delete("/products/:id", ah(async (req, res) => {
   await products.deleteOne({ _id: Number(req.params.id) });
   res.json({ ok: true });
 }));
+
+const sellerRouter = express.Router();
+sellerRouter.use(auth(), sellerOnly);
+sellerRouter.get("/me", (req, res) => res.json(sellerOut(req.user)));
+sellerRouter.get("/products", ah(async (req, res) =>
+  res.json((await products.find({ sellerId: req.user._id }).sort({ _id: -1 }).toArray()).map(productOut))));
+sellerRouter.post("/products", ah(async (req, res) => {
+  if (req.user.status !== "approved")
+    return res.status(403).json({ error: "Mahsulot qo'shish uchun admin tasdig'ini kuting." });
+  let product, image;
+  try {
+    product = readProduct({ ...req.body, active: true });
+    if (req.body.image) image = readProductImage(req.body.image);
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+  const doc = {
+    _id: await nextProductId(), ...product, active: true, sellerId: req.user._id,
+    ...(image ? { image } : {}), rating: 0, sold: 0, created: new Date()
+  };
+  await products.insertOne(doc);
+  res.status(201).json(productOut(doc));
+}));
+sellerRouter.put("/products/:id", ah(async (req, res) => {
+  if (req.user.status !== "approved")
+    return res.status(403).json({ error: "Sotuvchi akkauntingiz faol emas." });
+  let product, image;
+  try {
+    product = readProduct({ ...req.body, active: true });
+    if (req.body.image) image = readProductImage(req.body.image);
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+  const removeImage = req.body.removeImage === true || req.body.removeImage === "true";
+  const update = { $set: { ...product, active: true }, ...(image ? {} : removeImage ? { $unset: { image: "" } } : {}) };
+  if (image) update.$set.image = image;
+  const result = await products.findOneAndUpdate(
+    { _id: Number(req.params.id), sellerId: req.user._id }, update, { returnDocument: "after" }
+  );
+  if (!result) return res.status(404).json({ error: "Mahsulot topilmadi." });
+  res.json(productOut(result));
+}));
+sellerRouter.delete("/products/:id", ah(async (req, res) => {
+  if (req.user.status !== "approved")
+    return res.status(403).json({ error: "Sotuvchi akkauntingiz faol emas." });
+  const result = await products.deleteOne({ _id: Number(req.params.id), sellerId: req.user._id });
+  if (!result.deletedCount) return res.status(404).json({ error: "Mahsulot topilmadi." });
+  res.json({ ok: true });
+}));
+
+app.use("/api/seller", sellerRouter);
 app.use("/api/admin", admin);
 
 app.use("/api", (req, res) => res.status(404).json({ error: "Topilmadi." }));
@@ -1527,12 +1702,15 @@ async function main() {
     process.exit(1);
   }
   db = client.db(env("MONGODB_DB") || "xaridor");
-  users = db.collection("users"); products = db.collection("products");
+  users = db.collection("users"); sellers = db.collection("sellers"); products = db.collection("products");
   orders = db.collection("orders"); counters = db.collection("counters");
   slides = db.collection("slides"); promos = db.collection("promos"); promoUses = db.collection("promoUses");
   messages = db.collection("messages"); reviews = db.collection("reviews");
   messageCampaigns = db.collection("messageCampaigns");
   await users.createIndex({ phone: 1 }, { unique: true });
+  await sellers.createIndex({ email: 1 }, { unique: true });
+  await sellers.createIndex({ phone: 1 }, { unique: true });
+  await sellers.createIndex({ status: 1, created: 1 });
   await migrateUserCodes();
   await orders.createIndex({ userId: 1, created: -1 });
   await orders.createIndex({ tgSent: 1, created: 1 });

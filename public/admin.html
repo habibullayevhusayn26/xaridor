@@ -99,7 +99,7 @@ function shell(me) {
     <span class="sp"></span><button class="mini" id="tgTest">Telegramni tekshirish</button><a href="/" class="mini" style="text-decoration:none">Saytga o'tish</a><button class="mini" id="out">Chiqish (${esc(me.name)})</button></div></div>
     <div class="wrap"><div class="a-tabs" id="tabs">
       <button data-t="stats">Statistika</button><button data-t="orders">Buyurtmalar</button><button data-t="products">Mahsulotlar</button>
-      <button data-t="reviews">Sharhlar</button><button data-t="slides">Slaydlar</button><button data-t="promos">Promokodlar</button><button data-t="messages">Xabar yuborish</button></div>
+      <button data-t="reviews">Sharhlar</button><button data-t="sellers">Sotuvchilar</button><button data-t="slides">Slaydlar</button><button data-t="promos">Promokodlar</button><button data-t="messages">Xabar yuborish</button></div>
       <div id="view"></div></div>`;
   $("#tgTest").onclick = async () => { try { await api("/admin/telegram-test", { method: "POST" }); toast("Telegramga sinov xabari yuborildi"); } catch (e) { toast("Telegram xatosi: " + e.message); } };
   $("#out").onclick = () => { localStorage.removeItem("bz_admin_token"); loginView(); };
@@ -110,7 +110,7 @@ function shell(me) {
 async function render() {
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
   $("#view").innerHTML = `<p class="meta">Yuklanmoqda...</p>`;
-  try { await ({ stats: viewStats, orders: viewOrders, products: viewProducts, reviews: viewReviews, slides: viewSlides, promos: viewPromos, messages: viewMessages })[tab](); }
+  try { await ({ stats: viewStats, orders: viewOrders, products: viewProducts, reviews: viewReviews, sellers: viewSellers, slides: viewSlides, promos: viewPromos, messages: viewMessages })[tab](); }
   catch (e) { if (e.status === 401 || e.status === 403) { localStorage.removeItem("bz_admin_token"); loginView("Qayta kiring."); } else toast(e.message); }
 }
 
@@ -370,6 +370,34 @@ async function viewReviews() {
       toast(approve ? "Sharh tasdiqlandi" : "Sharh rad etildi");
       render();
     } catch (error) { toast(error.message); }
+  };
+}
+
+async function viewSellers() {
+  const list = await api("/admin/sellers");
+  $("#view").innerHTML = `<div class="panel"><h2>Admin tasdig'ini kutayotgan sotuvchilar</h2>
+    ${list.length ? `<table><tr><th>Do'kon / egasi</th><th>Aloqa</th><th>Email</th><th></th></tr>` +
+      list.map(seller => `<tr><td><b>${esc(seller.storeName)}</b><br>${esc(seller.name)}</td>
+        <td>${esc(seller.phone)}<br><small class="meta">${esc(seller.address)}</small></td>
+        <td>${esc(seller.email)}<br><small class="meta">${seller.emailVerified ? "Email tasdiqlangan" : "Email tasdiqlanmagan"}</small></td>
+        <td style="white-space:nowrap"><button class="mini" data-seller-approve="${esc(seller.id)}" ${seller.emailVerified ? "" : "disabled"}>Tasdiqlash</button>
+          <button class="mini del" data-seller-reject="${esc(seller.id)}">Rad etish</button></td></tr>`).join("") + `</table>`
+      : `<p class="meta">Tasdiq kutayotgan sotuvchi yo'q.</p>`}
+    </div>`;
+  $("#view").onclick = async event => {
+    const approve = event.target.closest("[data-seller-approve]");
+    const reject = event.target.closest("[data-seller-reject]");
+    if (!approve && !reject) return;
+    if (reject && !confirm("Sotuvchi arizasini rad etasizmi?")) return;
+    const button = approve || reject;
+    button.disabled = true;
+    try {
+      await api("/admin/sellers/" + encodeURIComponent(button.dataset[approve ? "sellerApprove" : "sellerReject"]), {
+        method: "PATCH", body: { status: approve ? "approved" : "rejected" }
+      });
+      toast(approve ? "Sotuvchi tasdiqlandi" : "Sotuvchi arizasi rad etildi");
+      render();
+    } catch (error) { toast(error.message); button.disabled = false; }
   };
 }
 
