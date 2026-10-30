@@ -37,13 +37,16 @@ Birinchi ishga tushishda 24 ta namuna mahsulot va admin akkaunt yaratiladi.
 - Admin panelda "Telegramni tekshirish" tugmasi sinov xabarini yuboradi,
   statistikada yuborilmay qolgan buyurtmalar soni ko'rinadi.
 - Admin botdagi **Foydalanuvchini qidirish** yoki **Buyurtmani qidirish** tugmasi orqali foydalanuvchini telefon/7 belgili ID bilan, buyurtmani esa `XR1234567` raqami bilan topadi. Buyurtma holatini botdagi tugmalar orqali o'zgartirish, foydalanuvchi ma'lumotlari va so'nggi buyurtmalarini ko'rish, hisobini bloklash yoki blokdan chiqarish mumkin. `/help` menyuni ko'rsatadi.
+- Bot admini `/promos` bilan promokodlarni ko'radi, `/addpromo` bilan yangi kod qo'shadi; bot tugmalari orqali kodni yoqish/o'chirish va o'chirish mumkin. Yangi kod formati: `KOD percent|fixed MIQDOR YYYY-MM-DD|- LIMIT|-`; masalan, `BAHOR10 percent 10 2027-03-31 100`.
 - Foydalanuvchi parolni unutsa, saytdagi support tugmasi orqali [@habibullayev_28](https://t.me/habibullayev_28) ga murojaat qiladi. Botda foydalanuvchini topgach, admin vaqtinchalik parol berishi mumkin; asl parol ko'rinmaydi va user vaqtinchalik parol bilan kirgach yangisini o'rnatishi shart.
 - Bot qidiruviga ruxsat berilgan Telegram akkauntining ID sini `TG_ADMIN_ID` ga kiriting. Bu sozlama bo'sh bo'lsa, `TG_CHAT_ID` ishlatiladi; guruh chatidan qidiruv bajarilmaydi.
 
 ## 5. Moslash
+- Banner slaydlari admin panelning **Slaydlar** bo'limida boshqariladi; JPG, PNG yoki WebP (5 MB gacha) yuklash mumkin.
+- Promokodlar admin panelning **Promokodlar** bo'limida ham boshqariladi. Foizli yoki belgilangan summadagi chegirma, tugash sanasi va umumiy foydalanish limiti sozlanadi.
 - Brend nomi: `public/index.html`, `public/admin.html`, `public/logo.svg`.
 - Ranglar: `public/style.css` boshidagi `:root`.
-- Promokodlar: `server.js` (`PROMO`) va `public/app.js` (`PROMO`) ichida bir xil bo'lsin: XARID10, YANGI5.
+- Dastlabki promokodlar bazaga bir marta XARID10 va YANGI5 sifatida qo'shiladi; keyin admin panel yoki Telegram botdan boshqariladi.
 - Ikonlar: `public/icons.js`. Admin panelda mahsulotga ro'yxatdan ikon tanlanadi.
 - Mahsulot qo'shish yoki tahrirlashda 5 MB gacha JPG, PNG va WebP rasmlarni yuklash mumkin; ular MongoDB da saqlanadi.
 

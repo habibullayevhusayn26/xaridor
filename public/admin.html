@@ -31,6 +31,7 @@ td select{padding:6px 8px;border:1.5px solid var(--line);border-radius:8px}
 .product-thumb{width:44px;height:44px;display:grid;place-items:center;border-radius:8px;overflow:hidden;color:var(--teal)}
 .product-thumb img{width:100%;height:100%;object-fit:cover}
 .image-preview{width:100%;max-height:220px;object-fit:contain;background:var(--bg);border-radius:10px}
+.banner-thumb{width:110px;height:62px;object-fit:cover;border-radius:8px;background:var(--bg)}
 </style>
 </head>
 <body>
@@ -88,7 +89,8 @@ function shell(me) {
   $("#app").innerHTML = `<div class="a-top"><div class="wrap"><img src="logo.svg" width="34" height="34" alt=""><b style="font-family:Unbounded,sans-serif;color:var(--teal)">Xaridor admin</b>
     <span class="sp"></span><button class="mini" id="tgTest">Telegramni tekshirish</button><a href="/" class="mini" style="text-decoration:none">Saytga o'tish</a><button class="mini" id="out">Chiqish (${esc(me.name)})</button></div></div>
     <div class="wrap"><div class="a-tabs" id="tabs">
-      <button data-t="stats">Statistika</button><button data-t="orders">Buyurtmalar</button><button data-t="products">Mahsulotlar</button></div>
+      <button data-t="stats">Statistika</button><button data-t="orders">Buyurtmalar</button><button data-t="products">Mahsulotlar</button>
+      <button data-t="slides">Slaydlar</button><button data-t="promos">Promokodlar</button></div>
       <div id="view"></div></div>`;
   $("#tgTest").onclick = async () => { try { await api("/admin/telegram-test", { method: "POST" }); toast("Telegramga sinov xabari yuborildi"); } catch (e) { toast("Telegram xatosi: " + e.message); } };
   $("#out").onclick = () => { localStorage.removeItem("bz_admin_token"); loginView(); };
@@ -99,7 +101,7 @@ function shell(me) {
 async function render() {
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
   $("#view").innerHTML = `<p class="meta">Yuklanmoqda...</p>`;
-  try { await ({ stats: viewStats, orders: viewOrders, products: viewProducts })[tab](); }
+  try { await ({ stats: viewStats, orders: viewOrders, products: viewProducts, slides: viewSlides, promos: viewPromos })[tab](); }
   catch (e) { if (e.status === 401 || e.status === 403) { localStorage.removeItem("bz_admin_token"); loginView("Qayta kiring."); } else toast(e.message); }
 }
 
@@ -115,6 +117,126 @@ async function viewStats() {
     <div class="kpi"><small>Telegramga yuborilmagan</small><b>${s.telegramPending}</b></div></div>
     <div class="panel"><b>Omborda kam qolgan (5 dona va kam)</b>${s.lowStock.length ?
       `<table>${s.lowStock.map(p => `<tr><td>${esc(p.name)}</td><td>${p.stock} dona</td></tr>`).join("")}</table>` : `<p class="meta">Hammasi yetarli.</p>`}</div>`;
+}
+
+async function viewSlides() {
+  const list = cache.slides = await api("/admin/slides");
+  $("#view").innerHTML = `<div style="display:flex;justify-content:flex-end"><button class="btn dark" id="newSlide">+ Slayd qo'shish</button></div>
+    <div class="panel">${list.length ? `<table><tr><th>Rasm</th><th>Sarlavha va izoh</th><th>Kategoriya</th><th></th></tr>` +
+    list.map(s => `<tr><td>${s.image ? `<img class="banner-thumb" src="${esc(s.image)}" alt="">` : "Rasm yo'q"}</td>
+      <td><b>${esc(s.title)}</b><br><small class="meta">${esc(s.description)}</small></td>
+      <td>${esc((CATS.find(c => c.id === s.category) || {}).name || "—")}</td>
+      <td style="white-space:nowrap"><button class="mini" data-slide-edit="${esc(s.id)}">Tahrirlash</button> <button class="mini del" data-slide-del="${esc(s.id)}">O'chirish</button></td></tr>`).join("") + `</table>`
+    : `<p class="meta">Slaydlar yo'q. Birinchi slaydni qo'shing.</p>`}</div>`;
+  $("#newSlide").onclick = () => slideForm();
+  $("#view").onclick = async e => {
+    const edit = e.target.closest("[data-slide-edit]"), del = e.target.closest("[data-slide-del]");
+    if (edit) slideForm(cache.slides.find(s => s.id === edit.dataset.slideEdit));
+    if (del && confirm("Slayd o'chirilsinmi?")) {
+      try { await api("/admin/slides/" + encodeURIComponent(del.dataset.slideDel), { method: "DELETE" }); toast("Slayd o'chirildi"); render(); }
+      catch (err) { toast(err.message); }
+    }
+  };
+}
+
+function slideForm(slide = {}) {
+  const v = (key, fallback = "") => esc(slide[key] ?? fallback);
+  $("#modalBox").innerHTML = `<button class="x" id="mx" aria-label="Yopish">${ic("x", 20)}</button><h2>${slide.id ? "Slaydni tahrirlash" : "Yangi slayd"}</h2>
+    <form class="form" id="sf">
+      <label>Sarlavha<input name="title" maxlength="100" required value="${v("title")}"></label>
+      <label>Izoh<textarea name="description" rows="3" maxlength="300" required>${v("description")}</textarea></label>
+      <label>Rasm (JPG, PNG yoki WebP, 5 MB gacha)<input name="imageFile" type="file" accept="image/jpeg,image/png,image/webp" ${slide.image ? "" : "required"}></label>
+      ${slide.image ? `<img class="image-preview" id="slidePreview" src="${v("image")}" alt="Slayd rasmi ko'rinishi">` : `<img class="image-preview" id="slidePreview" alt="Slayd rasmi ko'rinishi" hidden>`}
+      ${slide.image ? `<label style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" name="removeImage"> Rasmni olib tashlash</label>` : ""}
+      <label>Ko'rish tugmasi uchun kategoriya<select name="category"><option value="">Tugma ko'rsatilmasin</option>${CATS.map(c => `<option value="${esc(c.id)}" ${c.id === slide.category ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+      <div class="err" id="se"></div><button class="btn sun block">Saqlash</button></form>`;
+  $("#modal").hidden = false;
+  $("#mx").onclick = () => $("#modal").hidden = true;
+  $("#sf").imageFile.onchange = e => {
+    const file = e.target.files[0], preview = $("#slidePreview");
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
+      e.target.value = ""; $("#se").textContent = "JPG, PNG yoki WebP rasm tanlang (5 MB gacha)."; return;
+    }
+    preview.src = URL.createObjectURL(file); preview.hidden = false; $("#se").textContent = "";
+  };
+  $("#sf").onsubmit = async e => {
+    e.preventDefault();
+    const form = e.target, data = Object.fromEntries(new FormData(form));
+    delete data.imageFile;
+    try {
+      const file = form.imageFile.files[0];
+      if (file) data.image = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Rasmni o'qib bo'lmadi."));
+        reader.readAsDataURL(file);
+      });
+      data.removeImage = !!form.removeImage?.checked;
+      await api(slide.id ? "/admin/slides/" + encodeURIComponent(slide.id) : "/admin/slides", {
+        method: slide.id ? "PUT" : "POST", body: data
+      });
+      $("#modal").hidden = true; toast("Slayd saqlandi"); render();
+    } catch (err) { $("#se").textContent = err.message; }
+  };
+}
+
+async function viewPromos() {
+  const list = cache.promos = await api("/admin/promos");
+  $("#view").innerHTML = `<div style="display:flex;justify-content:flex-end"><button class="btn dark" id="newPromo">+ Promokod qo'shish</button></div>
+    <div class="panel">${list.length ? `<table><tr><th>Kod</th><th>Chegirma</th><th>Muddati</th><th>Foydalanish</th><th>Holati</th><th></th></tr>` +
+    list.map(p => `<tr class="${p.active ? "" : "off"}"><td><b>${esc(p.code)}</b></td>
+      <td>${p.type === "percent" ? `${p.value}%` : fmt(p.value)}</td>
+      <td>${p.expiresAt ? new Date(p.expiresAt).toLocaleString("uz-UZ") : "Muddatsiz"}</td>
+      <td>${p.usedCount}${p.maxUses == null ? " / ∞" : " / " + p.maxUses}</td>
+      <td>${p.active ? "Faol" : "O'chirilgan"}</td>
+      <td style="white-space:nowrap"><button class="mini" data-promo-toggle="${esc(p.code)}">${p.active ? "O'chirish" : "Yoqish"}</button> <button class="mini" data-promo-edit="${esc(p.code)}">Tahrirlash</button> <button class="mini del" data-promo-del="${esc(p.code)}">O'chirish</button></td></tr>`).join("") + `</table>`
+    : `<p class="meta">Promokodlar yo'q. Yangi kod qo'shishingiz mumkin.</p>`}</div>`;
+  $("#newPromo").onclick = () => promoForm();
+  $("#view").onclick = async e => {
+    const toggle = e.target.closest("[data-promo-toggle]"), edit = e.target.closest("[data-promo-edit]"), del = e.target.closest("[data-promo-del]");
+    if (edit) promoForm(cache.promos.find(p => p.code === edit.dataset.promoEdit));
+    if (toggle) {
+      const promo = cache.promos.find(p => p.code === toggle.dataset.promoToggle);
+      try { await api("/admin/promos/" + encodeURIComponent(promo.code), { method: "PATCH", body: { active: !promo.active } }); render(); }
+      catch (err) { toast(err.message); }
+    }
+    if (del && confirm(`${del.dataset.promoDel} promokodi o'chirilsinmi?`)) {
+      try { await api("/admin/promos/" + encodeURIComponent(del.dataset.promoDel), { method: "DELETE" }); toast("Promokod o'chirildi"); render(); }
+      catch (err) { toast(err.message); }
+    }
+  };
+}
+
+function promoForm(promo = {}) {
+  const v = (key, fallback = "") => esc(promo[key] ?? fallback);
+  const expiry = promo.expiresAt
+    ? new Date(new Date(promo.expiresAt).getTime() - new Date(promo.expiresAt).getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+    : "";
+  $("#modalBox").innerHTML = `<button class="x" id="mx" aria-label="Yopish">${ic("x", 20)}</button><h2>${promo.code ? "Promokodni tahrirlash" : "Yangi promokod"}</h2>
+    <form class="form" id="promoForm">
+      <label>Kod<input name="code" required minlength="3" maxlength="24" pattern="[A-Za-z0-9_-]+" ${promo.code ? "readonly" : ""} value="${v("code")}"></label>
+      <label>Chegirma turi<select name="type"><option value="percent" ${promo.type !== "fixed" ? "selected" : ""}>Foiz</option><option value="fixed" ${promo.type === "fixed" ? "selected" : ""}>So'm</option></select></label>
+      <label>Chegirma miqdori<input name="value" type="number" min="1" step="0.01" required value="${v("value")}"></label>
+      <label>Tugash sanasi (ixtiyoriy)<input name="expiresAt" type="datetime-local" value="${esc(expiry)}"></label>
+      <label>Foydalanish limiti (ixtiyoriy)<input name="maxUses" type="number" min="1" step="1" value="${v("maxUses")}"></label>
+      ${promo.code ? `<p class="meta">Ishlatilgan: ${promo.usedCount}${promo.maxUses == null ? "" : " / " + promo.maxUses}</p>` : ""}
+      <div class="err" id="promoError"></div><button class="btn sun block">Saqlash</button></form>`;
+  $("#modal").hidden = false;
+  $("#mx").onclick = () => $("#modal").hidden = true;
+  $("#promoForm").onsubmit = async e => {
+    e.preventDefault();
+    const form = e.target, data = Object.fromEntries(new FormData(form));
+    if (data.expiresAt) data.expiresAt = new Date(data.expiresAt).toISOString();
+    else data.expiresAt = null;
+    if (!data.maxUses) data.maxUses = null;
+    try {
+      await api(promo.code ? "/admin/promos/" + encodeURIComponent(promo.code) : "/admin/promos", {
+        method: promo.code ? "PUT" : "POST", body: data
+      });
+      $("#modal").hidden = true; toast("Promokod saqlandi"); render();
+    } catch (err) { $("#promoError").textContent = err.message; }
+  };
 }
 
 async function viewOrders() {

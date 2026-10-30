@@ -21,10 +21,10 @@ async function api(url, opts = {}) {
 }
 function logout() { state.user = null; store.set("user", null); store.set("token", null); updateBadges(); }
 
-const FREE_SHIP = 200000, SHIP = 15000, PROMO = { XARID10: 0.10, YANGI5: 0.05 };
+const FREE_SHIP = 200000, SHIP = 15000;
 const state = {
   cart: store.get("cart", {}), favs: store.get("favs", []),
-  user: store.get("user", null), promo: store.get("promo", ""),
+  user: store.get("user", null), promo: store.get("promo", ""), promoInfo: null,
   cat: null, q: "", onlyFav: false, min: 0, max: 0, sort: "pop"
 };
 const byId = id => PRODUCTS.find(p => p.id === id);
@@ -37,9 +37,13 @@ function toast(msg) {
   clearTimeout(tt); tt = setTimeout(() => (t.hidden = true), 2200);
 }
 function closeAll() {
-  $("#cartDrawer").hidden = true; $("#modal").hidden = true; $("#overlay").hidden = true;
+  $("#cartDrawer").hidden = true; $("#accountDrawer").hidden = true; $("#modal").hidden = true; $("#overlay").hidden = true;
+  document.documentElement.classList.remove("overlay-open");
 }
-function openOverlay() { $("#overlay").hidden = false; }
+function openOverlay() {
+  $("#overlay").hidden = false;
+  document.documentElement.classList.add("overlay-open");
+}
 
 /* ---------- catalog UI ---------- */
 function renderStatic() {
@@ -116,7 +120,8 @@ function toggleFav(id) {
 }
 function totals() {
   const sub = Object.entries(state.cart).reduce((s, [id, q]) => s + (byId(+id) ? byId(+id).price * q : 0), 0);
-  const d = PROMO[state.promo] ? sub * PROMO[state.promo] : 0;
+  const promo = state.promoInfo?.code === state.promo ? state.promoInfo : null;
+  const d = promo ? promo.type === "percent" ? Math.round(sub * promo.value / 100) : Math.min(sub, promo.value) : 0;
   const ship = sub && sub - d < FREE_SHIP ? SHIP : 0;
   return { sub, d, ship, total: sub - d + ship };
 }
@@ -145,8 +150,21 @@ function renderCart() {
 }
 function openCart() { renderCart(); $("#cartDrawer").hidden = false; openOverlay(); }
 
+async function applyPromo() {
+  const code = $("#promoIn").value.trim().toUpperCase();
+  if (!code) {
+    state.promo = ""; state.promoInfo = null; persist(); return renderCart();
+  }
+  try {
+    state.promoInfo = await api("/promos/" + encodeURIComponent(code));
+    state.promo = state.promoInfo.code; persist(); renderCart(); toast("Promokod qo'llandi");
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
 /* ---------- modals ---------- */
-function showModal(html) { $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button>` + html; $("#modal").hidden = false; openOverlay(); }
+function showModal(html) { $("#accountDrawer").hidden = true; $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button>` + html; $("#modal").hidden = false; openOverlay(); }
 
 function openProduct(id, keep) {
   const p = byId(id), fav = state.favs.includes(id);
@@ -213,6 +231,7 @@ async function openOrders() {
 }
 
 function requirePasswordChange() {
+  $("#accountDrawer").hidden = true;
   $("#modalBox").innerHTML = `<h2>Yangi parol o'rnating</h2>
     <p class="meta" style="margin-bottom:14px">Admin bergan vaqtinchalik parol bir martalik. Davom etish uchun yangi parol o'rnating.</p>
     <form class="form" id="requiredPasswordForm">
@@ -249,13 +268,17 @@ function requirePasswordChange() {
 }
 
 function openAccount(mode = "login") {
+  $("#cartDrawer").hidden = true;
+  $("#modal").hidden = true;
+  $("#accountDrawer").hidden = false;
+  openOverlay();
   if (state.user) {
-    showModal(`<h2>${esc(state.user.name)}</h2><p class="meta" style="margin-bottom:16px">ID: ${esc(state.user.id || "—")}<br>${esc(state.user.phone)}</p>
-      <div class="form"><button class="btn dark block" id="myOrders">Buyurtmalarim</button>${state.user.role === "admin" ? `<a class="btn sun block" style="text-align:center;text-decoration:none" href="/admin.html">Admin panel</a>` : ""}<button class="btn line block" id="logout">Chiqish</button></div>`);
+    $("#accountBody").innerHTML = `<h2>${esc(state.user.name)}</h2><p class="meta" style="margin-bottom:16px">ID: ${esc(state.user.id || "—")}<br>${esc(state.user.phone)}</p>
+      <div class="form"><button class="btn dark block" id="myOrders">Buyurtmalarim</button>${state.user.role === "admin" ? `<a class="btn sun block" style="text-align:center;text-decoration:none" href="/admin.html">Admin panel</a>` : ""}<button class="btn line block" id="logout">Chiqish</button></div>`;
     return;
   }
   const reg = mode === "reg";
-  showModal(`<div class="tabs"><button data-auth="login" class="${reg ? "" : "on"}">Kirish</button><button data-auth="reg" class="${reg ? "on" : ""}">Ro'yxatdan o'tish</button></div>
+  $("#accountBody").innerHTML = `<div class="tabs"><button data-auth="login" class="${reg ? "" : "on"}">Kirish</button><button data-auth="reg" class="${reg ? "on" : ""}">Ro'yxatdan o'tish</button></div>
     <form class="form" id="authForm">
       ${reg ? `<label>Ism-familiya<input name="name" required></label>` : ""}
       <label>Telefon<input name="phone" required placeholder="+998 90 123 45 67"></label>
@@ -263,7 +286,7 @@ function openAccount(mode = "login") {
       ${reg ? "" : `<a class="btn line block" href="https://t.me/habibullayev_28" target="_blank" rel="noopener noreferrer">Parolni tiklash uchun supportga yozish</a>`}
       <div class="err" id="authErr"></div>
       <button class="btn sun block" type="submit">${reg ? "Ro'yxatdan o'tish" : "Kirish"}</button>
-    </form>`);
+    </form>`;
   $("#authForm").addEventListener("submit", async e => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
@@ -281,24 +304,27 @@ function openAccount(mode = "login") {
 }
 
 /* ---------- hero slider ---------- */
-const SLIDES = [
-  { t: "Yangi kolleksiya — 40% gacha chegirma", p: "Kiyim va poyabzal hafta davomida arzonroq.", i: "shirt", bg: "linear-gradient(120deg,#0E5A5A,#17807A)", cat: "kiyim" },
-  { t: "Texnika bayrami", p: "Smartfon, noutbuk va quloqchinlar 12 oyga bo'lib to'lash bilan.", i: "smartphone", bg: "linear-gradient(120deg,#25306B,#3E4FA8)", cat: "elektronika" },
-  { t: "Uyingiz uchun hammasi", p: "Idish-tovoq, yorug'lik va ro'zg'or buyumlari.", i: "sofa", bg: "linear-gradient(120deg,#9A4A12,#D9812B)", cat: "uy" }
+let SLIDES = [
+  { title: "Yangi kolleksiya — 40% gacha chegirma", description: "Kiyim va poyabzal hafta davomida arzonroq.", icon: "shirt", bg: "linear-gradient(120deg,#0E5A5A,#17807A)", category: "kiyim" },
+  { title: "Texnika bayrami", description: "Smartfon, noutbuk va quloqchinlar 12 oyga bo'lib to'lash bilan.", icon: "smartphone", bg: "linear-gradient(120deg,#25306B,#3E4FA8)", category: "elektronika" },
+  { title: "Uyingiz uchun hammasi", description: "Idish-tovoq, yorug'lik va ro'zg'or buyumlari.", icon: "sofa", bg: "linear-gradient(120deg,#9A4A12,#D9812B)", category: "uy" }
 ];
 let si = 0, st;
 function renderHero() {
-  $("#hero").innerHTML = SLIDES.map((s, i) => `<div class="slide ${i ? "" : "on"}" style="background:${s.bg}">
-    <div><h2>${s.t}</h2><p>${s.p}</p><button class="btn sun" data-cat="${s.cat}">Ko'rish</button></div><div class="big">${ic(s.i, 160)}</div></div>`).join("") +
-    `<div class="dots">${SLIDES.map((_, i) => `<button data-slide="${i}" class="${i ? "" : "on"}" aria-label="${i + 1}-slayd"></button>`).join("")}</div>`;
+  $("#hero").innerHTML = SLIDES.map((s, i) => `<div class="slide ${i ? "" : "on"}" style="background:${esc(s.bg || "linear-gradient(120deg,#0E5A5A,#17807A)")}">
+    ${s.image ? `<img class="hero-image" src="${esc(s.image)}" alt="">` : ""}
+    <div class="slide-copy"><h2>${esc(s.title)}</h2><p>${esc(s.description)}</p>${s.category ? `<button class="btn sun" data-cat="${esc(s.category)}">Ko'rish</button>` : ""}</div>
+    ${s.image ? "" : `<div class="big">${ic(s.icon || "sparkles", 160)}</div>`}</div>`).join("") +
+    (SLIDES.length > 1 ? `<div class="dots">${SLIDES.map((_, i) => `<button data-slide="${i}" class="${i ? "" : "on"}" aria-label="${i + 1}-slayd"></button>`).join("")}</div>` : "");
   startSlider();
 }
 function goSlide(i) {
+  if (!SLIDES.length) return;
   si = (i + SLIDES.length) % SLIDES.length;
   document.querySelectorAll(".slide").forEach((s, k) => s.classList.toggle("on", k === si));
   document.querySelectorAll(".dots button").forEach((s, k) => s.classList.toggle("on", k === si));
 }
-function startSlider() { clearInterval(st); if (!matchMedia("(prefers-reduced-motion:reduce)").matches) st = setInterval(() => goSlide(si + 1), 5000); }
+function startSlider() { clearInterval(st); if (SLIDES.length > 1 && !matchMedia("(prefers-reduced-motion:reduce)").matches) st = setInterval(() => goSlide(si + 1), 5000); }
 
 /* ---------- navigation / search ---------- */
 function setCat(c) { state.cat = c || null; state.q = ""; state.onlyFav = false; $("#q").value = ""; $("#catMenu").hidden = true; closeAll(); renderGrid(); scrollTo({ top: 0, behavior: "smooth" }); }
@@ -318,12 +344,7 @@ document.addEventListener("click", e => {
   if ((el = g("data-slide"))) { goSlide(+el.dataset.slide); return startSlider(); }
   if ((el = g("data-auth"))) return openAccount(el.dataset.auth);
   if (g("data-close") || t.id === "overlay" || t.id === "modal") return closeAll();
-  if (t.id === "promoBtn") {
-    const c = $("#promoIn").value.trim().toUpperCase();
-    if (!c) { state.promo = ""; persist(); return renderCart(); }
-    if (PROMO[c]) { state.promo = c; persist(); renderCart(); toast("Promokod qo'llandi"); } else toast("Bunday promokod yo'q");
-    return;
-  }
+  if (t.id === "promoBtn") return applyPromo();
   if (t.id === "checkoutBtn") return openCheckout();
   if (t.id === "seeOrders" || t.id === "myOrders") return openOrders();
   if (t.id === "logout") { logout(); closeAll(); return toast("Chiqildi"); }
@@ -358,7 +379,16 @@ async function loadProducts() {
   renderGrid();
 }
 async function boot() {
-  renderStatic(); renderHero(); updateBadges();
+  renderStatic(); updateBadges();
+  try {
+    const slides = await api("/slides");
+    SLIDES = slides;
+  } catch { toast("Slaydlarni yuklab bo'lmadi"); }
+  renderHero();
+  if (state.promo) {
+    try { state.promoInfo = await api("/promos/" + encodeURIComponent(state.promo)); }
+    catch { state.promo = ""; state.promoInfo = null; persist(); toast("Saqlangan promokod endi amal qilmaydi"); }
+  }
   if (store.get("token", null)) {
     try {
       state.user = await api("/me");

@@ -40,6 +40,8 @@ const USER_CODE_DIGITS = USER_CODE_ALPHABET.slice(-8);
 const USER_CODE_PATTERN = /^(?=.*[A-Z])(?=.*[0-9])[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{7}$/;
 const TELEGRAM_USER_BUTTON = "🔎 Foydalanuvchini qidirish";
 const TELEGRAM_ORDER_BUTTON = "📦 Buyurtmani qidirish";
+const TELEGRAM_PROMOS_BUTTON = "🎟 Promokodlar";
+const TELEGRAM_ADD_PROMO_BUTTON = "➕ Promokod qo'shish";
 
 // ---- Telegram ----
 async function tgCall(method, payload, timeout = 10000) {
@@ -57,13 +59,18 @@ async function tgCall(method, payload, timeout = 10000) {
 }
 
 // ---- Sozlamalar ----
-const PROMO = { XARID10: 0.1, YANGI5: 0.05 };
 const FREE_SHIP = 200000, SHIP = 15000;
 const MAX_PRODUCT_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_SLIDE_IMAGE_BYTES = 5 * 1024 * 1024;
 const STATUSES = ["Qabul qilindi", "Yig'ilmoqda", "Yo'lda", "Yetkazildi", "Bekor qilindi"];
 const PAYS = ["Naqd", "Karta", "Muddatli"];
 const seed = JSON.parse(fs.readFileSync(path.join(__dirname, "seed.json"), "utf8"));
 const CATEGORIES = seed.categories;
+const DEFAULT_SLIDES = [
+  { title: "Yangi kolleksiya — 40% gacha chegirma", description: "Kiyim va poyabzal hafta davomida arzonroq.", icon: "shirt", bg: "linear-gradient(120deg,#0E5A5A,#17807A)", category: "kiyim" },
+  { title: "Texnika bayrami", description: "Smartfon, noutbuk va quloqchinlar 12 oyga bo'lib to'lash bilan.", icon: "smartphone", bg: "linear-gradient(120deg,#25306B,#3E4FA8)", category: "elektronika" },
+  { title: "Uyingiz uchun hammasi", description: "Idish-tovoq, yorug'lik va ro'zg'or buyumlari.", icon: "sofa", bg: "linear-gradient(120deg,#9A4A12,#D9812B)", category: "uy" }
+];
 
 const normPhone = s => {
   const d = String(s || "").replace(/[^\d+]/g, "");
@@ -72,7 +79,74 @@ const normPhone = s => {
 const fmtSum = n => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " so'm";
 const ah = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-let db, users, products, orders, counters;
+let db, users, products, orders, counters, slides, promos;
+
+const promoOut = p => ({
+  code: p.code, type: p.type, value: p.value, active: !!p.active,
+  expiresAt: p.expiresAt || null, maxUses: p.maxUses ?? null, usedCount: p.usedCount || 0,
+  created: p.created
+});
+
+function readSlide(body) {
+  const title = String(body.title || "").trim().slice(0, 100);
+  const description = String(body.description || "").trim().slice(0, 300);
+  const category = String(body.category || "");
+  if (!title) throw new Error("Slayd sarlavhasini kiriting.");
+  if (!description) throw new Error("Slayd izohini kiriting.");
+  if (category && !CATEGORIES.some(c => c.id === category)) throw new Error("Kategoriya noto'g'ri.");
+  return { title, description, category: category || null };
+}
+
+function readPromo(body) {
+  const code = String(body.code || "").trim().toUpperCase();
+  const type = String(body.type || "");
+  const value = Number(body.value);
+  if (!/^[A-Z0-9_-]{3,24}$/.test(code)) throw new Error("Kod 3–24 ta lotin harfi, raqam, _ yoki - dan iborat bo'lsin.");
+  if (!["percent", "fixed"].includes(type)) throw new Error("Chegirma turini tanlang.");
+  if (!Number.isFinite(value) || value <= 0 || (type === "percent" && value > 100))
+    throw new Error(type === "percent" ? "Foiz 1 dan 100 gacha bo'lishi kerak." : "Chegirma summasi noto'g'ri.");
+  const maxUses = body.maxUses === "" || body.maxUses == null ? null : Number(body.maxUses);
+  if (maxUses !== null && (!Number.isSafeInteger(maxUses) || maxUses < 1))
+    throw new Error("Foydalanish limiti kamida 1 bo'lishi kerak.");
+  const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+  if (expiresAt && !Number.isFinite(expiresAt.getTime())) throw new Error("Tugash sanasi noto'g'ri.");
+  if (expiresAt && expiresAt <= new Date()) throw new Error("Tugash sanasi kelajakda bo'lishi kerak.");
+  return { code, type, value: type === "fixed" ? Math.round(value) : Math.round(value * 100) / 100, maxUses, expiresAt };
+}
+
+function telegramPromoExpiry(value) {
+  if (value === "-") return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return new Date("invalid");
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
+    ? new Date(`${value}T23:59:59.999+05:00`) : new Date("invalid");
+}
+
+function promoFilter(code, now = new Date()) {
+  return {
+    code, active: true,
+    $and: [
+      { $or: [{ expiresAt: null }, { expiresAt: { $exists: false } }, { expiresAt: { $gt: now } }] },
+      { $or: [{ maxUses: null }, { maxUses: { $exists: false } }, { $expr: { $lt: ["$usedCount", "$maxUses"] } }] }
+    ]
+  };
+}
+
+function readSlideImage(value) {
+  if (typeof value !== "string") throw new Error("Slayd rasmi noto'g'ri.");
+  const match = value.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/);
+  if (!match) throw new Error("JPG, PNG yoki WebP rasm tanlang.");
+  const data = Buffer.from(match[2], "base64");
+  if (!data.length || data.length > MAX_SLIDE_IMAGE_BYTES || data.toString("base64") !== match[2])
+    throw new Error("Rasm hajmi 5 MB dan oshmasligi kerak.");
+  const validSignature = match[1] === "image/jpeg"
+    ? data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff
+    : match[1] === "image/png"
+      ? data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      : data.toString("ascii", 0, 4) === "RIFF" && data.toString("ascii", 8, 12) === "WEBP";
+  if (!validSignature) throw new Error("Rasm faylining formati noto'g'ri.");
+  return { contentType: match[1], data: match[2] };
+}
 
 function makeUserCode() {
   const chars = [
@@ -145,14 +219,44 @@ async function flushTelegram() {
 }
 
 const telegramSearches = new Map();
+const telegramPromoFlows = new Set();
 const telegramKeyboard = {
-  keyboard: [[{ text: TELEGRAM_USER_BUTTON }, { text: TELEGRAM_ORDER_BUTTON }]],
+  keyboard: [
+    [{ text: TELEGRAM_USER_BUTTON }, { text: TELEGRAM_ORDER_BUTTON }],
+    [{ text: TELEGRAM_PROMOS_BUTTON }, { text: TELEGRAM_ADD_PROMO_BUTTON }]
+  ],
   resize_keyboard: true,
   is_persistent: true
 };
 const telegramMenu = () => ({ text: "Kerakli qidiruv turini tanlang:", reply_markup: telegramKeyboard });
 const telegramSend = (chatId, text, replyMarkup = telegramKeyboard) =>
   tgCall("sendMessage", { chat_id: chatId, text, reply_markup: replyMarkup });
+
+function telegramPromoDetails(p) {
+  const discount = p.type === "percent" ? `${p.value}%` : fmtSum(p.value);
+  const expiry = p.expiresAt ? new Date(p.expiresAt).toLocaleDateString("uz-UZ") : "muddatsiz";
+  const limit = p.maxUses == null ? "cheksiz" : `${p.usedCount || 0}/${p.maxUses}`;
+  return `${p.code} — ${discount} · ${p.active ? "faol" : "o'chirilgan"} · ${expiry} · ${limit}`;
+}
+
+async function showTelegramPromos(chatId, messageId) {
+  const list = await promos.find().sort({ created: -1 }).limit(20).toArray();
+  const total = await promos.countDocuments();
+  const text = list.length
+    ? `Promokodlar (${Math.min(total, list.length)}/${total}):\n\n${list.map(telegramPromoDetails).join("\n")}`
+    : "Promokodlar yo'q. Yangi kod qo'shish uchun /addpromo yuboring.";
+  const replyMarkup = list.length ? {
+    inline_keyboard: list.map(p => [
+      { text: `${p.active ? "⏸ O'chirish" : "▶️ Yoqish"} · ${p.code}`, callback_data: `promo:${p.code}:toggle` },
+      { text: "🗑", callback_data: `promo:${p.code}:delete` }
+    ])
+  } : telegramKeyboard;
+  if (messageId) {
+    await tgCall("editMessageText", { chat_id: chatId, message_id: messageId, text, reply_markup: replyMarkup });
+  } else {
+    await telegramSend(chatId, text, replyMarkup);
+  }
+}
 
 async function findTelegramUser(query) {
   const phone = normPhone(query);
@@ -308,6 +412,25 @@ async function handleTelegramCallback(callback) {
     }
     return;
   }
+  if (type === "promo" && /^[A-Z0-9_-]{3,24}$/.test(id) && ["toggle", "delete"].includes(action)) {
+    if (action === "delete") {
+      const result = await promos.deleteOne({ code: id });
+      await tgCall("answerCallbackQuery", {
+        callback_query_id: callback.id,
+        text: result.deletedCount ? `${id} o'chirildi.` : "Promokod topilmadi."
+      });
+    } else {
+      const promo = await promos.findOne({ code: id });
+      if (!promo) {
+        await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Promokod topilmadi." });
+      } else {
+        await promos.updateOne({ code: id }, { $set: { active: !promo.active } });
+        await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: promo.active ? "Promokod o'chirildi." : "Promokod yoqildi." });
+      }
+    }
+    await showTelegramPromos(callback.message.chat.id, callback.message.message_id);
+    return;
+  }
   await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Bu tugma eskirgan." });
 }
 
@@ -329,8 +452,67 @@ async function handleTelegramUpdate(update) {
   const inlineQuery = match?.[2]?.trim();
   if (["start", "help"].includes(command)) {
     telegramSearches.delete(String(message.chat.id));
-    await reply("Foydalanuvchini yoki buyurtmani qidirish uchun tugmalardan foydalaning.");
+    telegramPromoFlows.delete(String(message.chat.id));
+    await reply("Foydalanuvchi va buyurtmalarni qidiring, promokodlarni boshqaring.\n\n/promos — kodlar ro'yxati\n/addpromo — yangi kod qo'shish\n/editpromo KOD percent|fixed MIQDOR YYYY-MM-DD|- LIMIT|- — tahrirlash\n/promo KOD on|off|delete — yoqish/o'chirish\n\nKod: KOD percent|fixed MIQDOR YYYY-MM-DD|- LIMIT|-");
     return;
+  }
+  if (["promos", "promokodlar"].includes(command) || text === TELEGRAM_PROMOS_BUTTON) {
+    telegramSearches.delete(String(message.chat.id));
+    telegramPromoFlows.delete(String(message.chat.id));
+    return showTelegramPromos(message.chat.id);
+  }
+  if (["addpromo", "promokod"].includes(command) || text === TELEGRAM_ADD_PROMO_BUTTON) {
+    telegramSearches.delete(String(message.chat.id));
+    telegramPromoFlows.add(String(message.chat.id));
+    return reply("Yangi promokod ma'lumotlarini bitta qatorda yuboring:\nKOD percent|fixed MIQDOR YYYY-MM-DD|- LIMIT|-\nMisol: BAHOR10 percent 10 2027-03-31 100\nMuddatsiz/limitsiz bo'lsa - yozing.");
+  }
+  if (command === "editpromo") {
+    telegramSearches.delete(String(message.chat.id));
+    telegramPromoFlows.delete(String(message.chat.id));
+    const parts = (inlineQuery || "").split(/\s+/);
+    if (parts.length !== 5) return reply("Foydalanish: /editpromo KOD percent|fixed MIQDOR YYYY-MM-DD|- LIMIT|-");
+    const [code, type, rawValue, rawExpiry, rawLimit] = parts;
+    const current = await promos.findOne({ code: code.toUpperCase() });
+    if (!current) return reply("Promokod topilmadi.");
+    const expiresAt = telegramPromoExpiry(rawExpiry);
+    let updated;
+    try {
+      updated = readPromo({ code, type, value: rawValue, expiresAt, maxUses: rawLimit === "-" ? null : rawLimit });
+    } catch (e) { return reply(e.message); }
+    if (updated.maxUses !== null && updated.maxUses < (current.usedCount || 0))
+      return reply("Foydalanish limiti ishlatilgan kodlar sonidan kam bo'lmasligi kerak.");
+    await promos.updateOne({ code: current.code }, {
+      $set: { type: updated.type, value: updated.value, expiresAt: updated.expiresAt, maxUses: updated.maxUses }
+    });
+    return reply(`${code.toUpperCase()} yangilandi. ${telegramPromoDetails({ ...current, ...updated })}`);
+  }
+  if (command === "promo") {
+    telegramSearches.delete(String(message.chat.id));
+    telegramPromoFlows.delete(String(message.chat.id));
+    const [code, action] = (inlineQuery || "").toUpperCase().split(/\s+/);
+    if (!/^[A-Z0-9_-]{3,24}$/.test(code || "") || !["ON", "OFF", "DELETE"].includes(action))
+      return reply("Foydalanish: /promo KOD on|off|delete");
+    if (action === "DELETE") {
+      const result = await promos.deleteOne({ code });
+      return reply(result.deletedCount ? `${code} o'chirildi.` : "Promokod topilmadi.");
+    }
+    const result = await promos.updateOne({ code }, { $set: { active: action === "ON" } });
+    return reply(result.matchedCount ? `${code}: ${action === "ON" ? "faol" : "o'chirilgan"}.` : "Promokod topilmadi.");
+  }
+  if (telegramPromoFlows.has(String(message.chat.id))) {
+    telegramPromoFlows.delete(String(message.chat.id));
+    const parts = text.split(/\s+/);
+    if (parts.length !== 5) return reply("Format noto'g'ri. /addpromo tugmasini bosib, 5 ta maydonni yuboring.");
+    const [code, type, rawValue, rawExpiry, rawLimit] = parts;
+    const expiresAt = telegramPromoExpiry(rawExpiry);
+    let promo;
+    try {
+      promo = readPromo({ code, type, value: rawValue, expiresAt, maxUses: rawLimit === "-" ? null : rawLimit });
+    } catch (e) { return reply(e.message); }
+    if (await promos.findOne({ code: promo.code }, { projection: { _id: 1 } }))
+      return reply("Bu promokod avvaldan mavjud. Boshqa kod tanlang.");
+    await promos.insertOne({ ...promo, active: true, usedCount: 0, created: new Date() });
+    return reply(`${promo.code} promokodi qo'shildi. ${telegramPromoDetails({ ...promo, active: true, usedCount: 0 })}`);
   }
   if (["user", "search", "qidir"].includes(command)) {
     telegramSearches.set(String(message.chat.id), "user");
@@ -458,6 +640,25 @@ const orderLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHe
 // ---- Ochiq API ----
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 app.get("/api/categories", (req, res) => res.json(CATEGORIES));
+app.get("/api/slides", ah(async (req, res) =>
+  res.json((await slides.find().sort({ created: 1, _id: 1 }).toArray()).map(s => ({
+    id: String(s._id), title: s.title, description: s.description, category: s.category || null,
+    icon: s.icon || "sparkles", bg: s.bg || "linear-gradient(120deg,#0E5A5A,#17807A)",
+    image: s.image ? `/api/slides/${s._id}/image` : null
+  })))));
+app.get("/api/slides/:id/image", ah(async (req, res) => {
+  if (!ObjectId.isValid(req.params.id)) return res.status(404).end();
+  const slide = await slides.findOne({ _id: new ObjectId(req.params.id) }, { projection: { image: 1 } });
+  if (!slide?.image) return res.status(404).end();
+  res.set({ "Content-Type": slide.image.contentType, "Cache-Control": "no-cache" });
+  res.send(Buffer.from(slide.image.data, "base64"));
+}));
+app.get("/api/promos/:code", ah(async (req, res) => {
+  const code = String(req.params.code || "").trim().toUpperCase();
+  const promo = await promos.findOne(promoFilter(code));
+  if (!promo) return res.status(400).json({ error: "Promokod noto'g'ri, muddati tugagan yoki limiti to'lgan." });
+  res.json(promoOut(promo));
+}));
 app.get("/api/products", ah(async (req, res) =>
   res.json((await products.find({ active: true }).sort({ sold: -1 }).toArray()).map(productOut))));
 app.get("/api/products/:id/image", ah(async (req, res) => {
@@ -540,6 +741,9 @@ app.post("/api/orders", orderLimiter, auth(), ah(async (req, res) => {
   const ids = [...qty.keys()];
   const found = await products.find({ _id: { $in: ids }, active: true }).toArray();
   if (found.length !== ids.length) return res.status(400).json({ error: "Mahsulot topilmadi yoki sotuvdan olingan." });
+  const promoCode = String(b.promo || "").trim().toUpperCase();
+  const selectedPromo = promoCode ? await promos.findOne(promoFilter(promoCode)) : null;
+  if (promoCode && !selectedPromo) return res.status(400).json({ error: "Promokod noto'g'ri, muddati tugagan yoki limiti to'lgan." });
 
   // Omborni kamaytirish (har biri alohida, shartli); xato bo'lsa qaytariladi
   const done = [];
@@ -554,24 +758,34 @@ app.post("/api/orders", orderLimiter, auth(), ah(async (req, res) => {
     done.push([p._id, q]);
   }
 
-  const promo = String(b.promo || "").toUpperCase();
-  const rate = PROMO[promo] || 0;
   const items = found.map(p => ({ id: p._id, name: p.name, icon: p.icon, q: qty.get(p._id), price: p.price }));
   const sub = items.reduce((s, i) => s + i.price * i.q, 0);
-  const discount = Math.round(sub * rate);
+  const discount = selectedPromo
+    ? selectedPromo.type === "percent" ? Math.round(sub * selectedPromo.value / 100) : Math.min(sub, selectedPromo.value)
+    : 0;
+  if (selectedPromo) {
+    let claimed;
+    try { claimed = await promos.updateOne(promoFilter(selectedPromo.code), { $inc: { usedCount: 1 } }); }
+    catch (e) { await rollback(); throw e; }
+    if (!claimed.modifiedCount) {
+      await rollback();
+      return res.status(400).json({ error: "Promokod limiti tugadi yoki endi amal qilmaydi." });
+    }
+  }
   const total = sub - discount + (sub - discount < FREE_SHIP ? SHIP : 0);
 
   let order;
   try {
     for (let k = 0; k < 5 && !order; k++) {
       const doc = { _id: "XR" + crypto.randomInt(1000000, 9999999), userId: req.user._id, name, phone, city, addr, pay,
-        total, promo: rate ? promo : null, status: STATUSES[0], items, created: new Date(), tgSent: false };
+        total, promo: selectedPromo?.code || null, status: STATUSES[0], items, created: new Date(), tgSent: false };
       try { await orders.insertOne(doc); order = doc; }
       catch (e) { if (e.code !== 11000) throw e; }
     }
     if (!order) throw new Error("Buyurtma raqamini yaratib bo'lmadi.");
   } catch (e) {
     await rollback();
+    if (selectedPromo) await promos.updateOne({ code: selectedPromo.code, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
     throw e;
   }
   sendOrderToTelegram(order).catch(e => console.warn("Telegram (qayta uriniladi):", e.message));
@@ -605,6 +819,94 @@ admin.get("/stats", ah(async (req, res) => {
 admin.post("/telegram-test", ah(async (req, res) => {
   try { await tgCall("sendMessage", { chat_id: TG_CHAT, text: "Xaridor: Telegram ulanishi ishlayapti." }); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
+}));
+
+admin.get("/slides", ah(async (req, res) =>
+  res.json((await slides.find().sort({ created: 1, _id: 1 }).toArray()).map(s => ({
+    id: String(s._id), title: s.title, description: s.description, category: s.category || "",
+    image: s.image ? `/api/slides/${s._id}/image` : null
+  })))));
+
+admin.post("/slides", ah(async (req, res) => {
+  let slide, image;
+  try {
+    slide = readSlide(req.body);
+    image = readSlideImage(req.body.image);
+  } catch (e) { return res.status(400).json({ error: e.message }); }
+  const doc = { _id: new ObjectId(), ...slide, image, created: new Date() };
+  await slides.insertOne(doc);
+  res.json({ id: String(doc._id) });
+}));
+
+admin.put("/slides/:id", ah(async (req, res) => {
+  if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Slayd ID noto'g'ri." });
+  let slide, image;
+  try {
+    slide = readSlide(req.body);
+    if (req.body.image) image = readSlideImage(req.body.image);
+  } catch (e) { return res.status(400).json({ error: e.message }); }
+  const removeImage = req.body.removeImage === true || req.body.removeImage === "true" || req.body.removeImage === "on";
+  const update = { $set: slide };
+  if (image) update.$set.image = image;
+  else if (removeImage) update.$unset = { image: "" };
+  const result = await slides.updateOne({ _id: new ObjectId(req.params.id) }, update);
+  if (!result.matchedCount) return res.status(404).json({ error: "Slayd topilmadi." });
+  res.json({ ok: true });
+}));
+
+admin.delete("/slides/:id", ah(async (req, res) => {
+  if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Slayd ID noto'g'ri." });
+  await slides.deleteOne({ _id: new ObjectId(req.params.id) });
+  res.json({ ok: true });
+}));
+
+admin.get("/promos", ah(async (req, res) =>
+  res.json((await promos.find().sort({ created: -1 }).toArray()).map(promoOut))));
+
+admin.post("/promos", ah(async (req, res) => {
+  let promo;
+  try { promo = readPromo(req.body); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+  try {
+    const doc = { ...promo, active: true, usedCount: 0, created: new Date() };
+    await promos.insertOne(doc);
+    res.json(promoOut(doc));
+  } catch (e) {
+    if (e.code === 11000) return res.status(409).json({ error: "Bu promokod avvaldan mavjud." });
+    throw e;
+  }
+}));
+
+admin.put("/promos/:code", ah(async (req, res) => {
+  const code = String(req.params.code || "").toUpperCase();
+  let promo;
+  try { promo = readPromo({ ...req.body, code }); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+  const existing = await promos.findOne({ code }, { projection: { usedCount: 1 } });
+  if (!existing) return res.status(404).json({ error: "Promokod topilmadi." });
+  if (promo.maxUses !== null && promo.maxUses < (existing.usedCount || 0))
+    return res.status(400).json({ error: "Foydalanish limiti ishlatilgan kodlar sonidan kam bo'lmasligi kerak." });
+  const result = await promos.findOneAndUpdate(
+    { code },
+    { $set: { type: promo.type, value: promo.value, expiresAt: promo.expiresAt, maxUses: promo.maxUses } },
+    { returnDocument: "after" }
+  );
+  res.json(promoOut(result));
+}));
+
+admin.patch("/promos/:code", ah(async (req, res) => {
+  const code = String(req.params.code || "").toUpperCase();
+  if (typeof req.body.active !== "boolean") return res.status(400).json({ error: "Promokod holati noto'g'ri." });
+  const result = await promos.findOneAndUpdate({ code }, { $set: { active: req.body.active } }, { returnDocument: "after" });
+  if (!result) return res.status(404).json({ error: "Promokod topilmadi." });
+  res.json(promoOut(result));
+}));
+
+admin.delete("/promos/:code", ah(async (req, res) => {
+  const code = String(req.params.code || "").toUpperCase();
+  const result = await promos.deleteOne({ code });
+  if (!result.deletedCount) return res.status(404).json({ error: "Promokod topilmadi." });
+  res.json({ ok: true });
 }));
 
 admin.get("/orders/search", ah(async (req, res) => {
@@ -702,11 +1004,30 @@ async function main() {
   db = client.db(env("MONGODB_DB") || "xaridor");
   users = db.collection("users"); products = db.collection("products");
   orders = db.collection("orders"); counters = db.collection("counters");
+  slides = db.collection("slides"); promos = db.collection("promos");
   await users.createIndex({ phone: 1 }, { unique: true });
   await migrateUserCodes();
   await orders.createIndex({ userId: 1, created: -1 });
   await orders.createIndex({ tgSent: 1, created: 1 });
   await products.createIndex({ active: 1, sold: -1 });
+  await slides.createIndex({ created: 1 });
+  await promos.createIndex({ code: 1 }, { unique: true });
+
+  const slideSeed = await counters.updateOne(
+    { _id: "slide-seed-v1" }, { $setOnInsert: { created: new Date() } }, { upsert: true }
+  );
+  if (slideSeed.upsertedCount) {
+    await slides.insertMany(DEFAULT_SLIDES.map((s, i) => ({ ...s, created: new Date(Date.now() + i) })));
+  }
+  const promoSeed = await counters.updateOne(
+    { _id: "promo-seed-v1" }, { $setOnInsert: { created: new Date() } }, { upsert: true }
+  );
+  if (promoSeed.upsertedCount) {
+    await promos.insertMany([
+      { code: "XARID10", type: "percent", value: 10, active: true, expiresAt: null, maxUses: null, usedCount: 0, created: new Date() },
+      { code: "YANGI5", type: "percent", value: 5, active: true, expiresAt: null, maxUses: null, usedCount: 0, created: new Date() }
+    ]);
+  }
 
   // 3) Namuna mahsulotlar (faqat baza bo'sh bo'lsa)
   if (await products.countDocuments() === 0) {
