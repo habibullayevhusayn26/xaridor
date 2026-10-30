@@ -1006,13 +1006,16 @@ app.get("/api/products/:id/reviews", auth(false), ah(async (req, res) => {
   if (!Number.isSafeInteger(productId)) return res.status(404).json({ error: "Mahsulot topilmadi." });
   const product = await products.findOne({ _id: productId, active: true }, { projection: { _id: 1 } });
   if (!product) return res.status(404).json({ error: "Mahsulot topilmadi." });
-  const [list, totals, myReview] = await Promise.all([
-    reviews.find({ productId, status: "approved" }).sort({ created: -1 }).limit(50).toArray(),
+  const [list, totals, myReview, eligible] = await Promise.all([
+    reviews.find({ productId, status: "approved", purchaseVerified: true }).sort({ created: -1 }).limit(50).toArray(),
     reviews.aggregate([
-      { $match: { productId, status: "approved" } },
+      { $match: { productId, status: "approved", purchaseVerified: true } },
       { $group: { _id: null, count: { $sum: 1 }, average: { $avg: "$rating" } } }
     ]).toArray(),
-    req.user?.role === "user" ? reviews.findOne({ productId, userId: req.user._id }) : null
+    req.user?.role === "user" ? reviews.findOne({ productId, userId: req.user._id, purchaseVerified: true }) : null,
+    req.user?.role === "user" ? orders.findOne({
+      userId: req.user._id, status: "Yetkazildi", "items.id": productId
+    }, { projection: { _id: 1 } }) : null
   ]);
   const average = totals[0] ? Math.round(totals[0].average * 10) / 10 : 0;
   res.json({
@@ -1021,7 +1024,8 @@ app.get("/api/products/:id/reviews", auth(false), ah(async (req, res) => {
       id: String(review._id), name: review.userName, rating: review.rating,
       body: review.body, created: review.created
     })),
-    myReview: myReview ? { status: myReview.status, rating: myReview.rating, body: myReview.body } : null
+    myReview: myReview ? { status: myReview.status, rating: myReview.rating, body: myReview.body } : null,
+    eligible: !!eligible
   });
 }));
 app.post("/api/products/:id/reviews", auth(), ah(async (req, res) => {
@@ -1036,12 +1040,23 @@ app.post("/api/products/:id/reviews", auth(), ah(async (req, res) => {
     return res.status(400).json({ error: "Sharh 5 dan 1000 belgigacha bo'lishi kerak." });
   const product = await products.findOne({ _id: productId, active: true }, { projection: { _id: 1 } });
   if (!product) return res.status(404).json({ error: "Mahsulot topilmadi." });
+  const eligible = await orders.findOne({
+    userId: req.user._id, status: "Yetkazildi", "items.id": productId
+  }, { projection: { _id: 1 } });
+  if (!eligible)
+    return res.status(403).json({ error: "Sharh faqat shu mahsulot buyurtmangizda bo'lib, holati «Yetkazildi» bo'lganda yoziladi." });
   const existing = await reviews.findOne({ productId, userId: req.user._id });
   if (existing) {
+    if (!existing.purchaseVerified) {
+      await reviews.updateOne({ _id: existing._id }, {
+        $set: { rating, body, status: "pending", purchaseVerified: true, updated: new Date() }
+      });
+      return res.json({ ok: true, status: "pending" });
+    }
     if (existing.status !== "pending")
       return res.status(409).json({ error: "Bu mahsulotga sharh allaqachon yuborilgan." });
     await reviews.updateOne({ _id: existing._id, status: "pending" }, {
-      $set: { rating, body, updated: new Date() }
+      $set: { rating, body, purchaseVerified: true, updated: new Date() }
     });
     return res.json({ ok: true, status: "pending" });
   }
@@ -1049,7 +1064,7 @@ app.post("/api/products/:id/reviews", auth(), ah(async (req, res) => {
     await reviews.insertOne({
       _id: new ObjectId(), productId, userId: req.user._id,
       userCode: req.user.userCode, userName: req.user.name,
-      rating, body, status: "pending", created: new Date()
+      rating, body, status: "pending", purchaseVerified: true, created: new Date()
     });
   } catch (error) {
     if (error.code === 11000) return res.status(409).json({ error: "Bu mahsulotga sharh allaqachon yuborilgan." });
@@ -1293,7 +1308,7 @@ admin.post("/messages", ah(async (req, res) => {
 }));
 
 admin.get("/reviews", ah(async (req, res) => {
-  const list = await reviews.find({ status: "pending" }).sort({ created: 1 }).limit(200).toArray();
+  const list = await reviews.find({ status: "pending", purchaseVerified: true }).sort({ created: 1 }).limit(200).toArray();
   const productIds = [...new Set(list.map(review => review.productId))];
   const productList = await products.find({ _id: { $in: productIds } }, { projection: { name: 1 } }).toArray();
   const names = new Map(productList.map(product => [product._id, product.name]));
@@ -1309,7 +1324,7 @@ admin.patch("/reviews/:id", ah(async (req, res) => {
   if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Sharh ID noto'g'ri." });
   if (req.body.status !== "approved") return res.status(400).json({ error: "Sharh holati noto'g'ri." });
   const result = await reviews.updateOne(
-    { _id: new ObjectId(req.params.id), status: "pending" },
+    { _id: new ObjectId(req.params.id), status: "pending", purchaseVerified: true },
     { $set: { status: "approved", moderatedAt: new Date() } }
   );
   if (!result.modifiedCount) return res.status(404).json({ error: "Tasdiqlanmagan sharh topilmadi." });
@@ -1318,7 +1333,7 @@ admin.patch("/reviews/:id", ah(async (req, res) => {
 
 admin.delete("/reviews/:id", ah(async (req, res) => {
   if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Sharh ID noto'g'ri." });
-  const result = await reviews.deleteOne({ _id: new ObjectId(req.params.id), status: "pending" });
+  const result = await reviews.deleteOne({ _id: new ObjectId(req.params.id), status: "pending", purchaseVerified: true });
   if (!result.deletedCount) return res.status(404).json({ error: "Tasdiqlanmagan sharh topilmadi." });
   res.json({ ok: true });
 }));

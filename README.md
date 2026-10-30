@@ -45,7 +45,7 @@ Birinchi ishga tushishda 24 ta namuna mahsulot va admin akkaunt yaratiladi.
 ## 5. Moslash
 - Banner slaydlari admin panelning **Slaydlar** bo'limida boshqariladi; JPG, PNG yoki WebP (5 MB gacha) yuklash mumkin.
 - Promokodlar admin panelning **Promokodlar** bo'limida ham boshqariladi. Foizli yoki belgilangan summadagi chegirma, tugash sanasi, jami va foydalanuvchi boshiga limit hamda minimal savdo summasi sozlanadi.
-- Mijozlar akkaunt bilan kirib mahsulotga baho va sharh yuborishi mumkin; sharh admin paneldagi **Sharhlar** bo'limida tasdiqlangandan keyin ommaga ko'rinadi. Bir foydalanuvchi har bir mahsulotga bitta sharh qoldiradi.
+- Faqat akkauntiga tegishli buyurtmada mahsulot bor va buyurtma holati **Yetkazildi** bo'lgan foydalanuvchi baho va sharh yubora oladi. Sharh admin paneldagi **Sharhlar** bo'limida tasdiqlangandan keyin ommaga ko'rinadi. Bir foydalanuvchi har bir mahsulotga bitta sharh qoldiradi.
 - Foydalanuvchi buyurtmalarida holatlar bosqichma-bosqich ko'rsatiladi. **Qayta xarid qilish** oldingi buyurtmadan omborda bor mahsulotlarni savatga qo'shadi.
 - Brend nomi: `public/index.html`, `public/admin.html`, `public/logo.svg`.
 - Ranglar: `public/style.css` boshidagi `:root`.

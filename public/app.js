@@ -270,14 +270,16 @@ async function loadProductReviews(productId) {
       : `<p class="meta">Hozircha tasdiqlangan sharh yo'q.</p>`;
     const formHTML = data.myReview
       ? `<p class="review-notice">${data.myReview.status === "pending" ? "Sharhingiz admin tasdig'ini kutmoqda." : "Bu mahsulotga sharh qoldirgansiz."}</p>`
-      : state.user
+      : state.user && data.eligible
         ? `<form class="form review-form" id="reviewForm">
             <label>Baho<select name="rating" required><option value="5">5 — A'lo</option><option value="4">4 — Yaxshi</option><option value="3">3 — O'rtacha</option><option value="2">2 — Yomon</option><option value="1">1 — Juda yomon</option></select></label>
             <label>Sharhingiz<textarea name="body" minlength="5" maxlength="1000" rows="3" required placeholder="Mahsulot haqidagi fikringiz"></textarea></label>
             <p class="meta">Sharh admin tasdiqlagandan keyin saytda ko'rinadi.</p>
             <div class="err" id="reviewError"></div><button class="btn line block" type="submit">Sharh yuborish</button>
           </form>`
-        : `<button class="btn line" id="reviewLogin">Sharh yozish uchun kiring</button>`;
+        : state.user
+          ? `<p class="review-notice">Sharh yozish uchun mahsulot qatnashgan buyurtmangiz holati «Yetkazildi» bo'lishi kerak.</p>`
+          : `<button class="btn line" id="reviewLogin">Sharh yozish uchun kiring</button>`;
     current.innerHTML = `<div class="row review-heading"><h2>Mijozlar sharhlari</h2><b>${data.count ? `${data.average} / 5 · ${data.count} ta` : ""}</b></div>${reviewsHTML}${formHTML}`;
     if ($("#reviewLogin", current)) $("#reviewLogin", current).onclick = () => openAccount();
     const form = $("#reviewForm", current);
