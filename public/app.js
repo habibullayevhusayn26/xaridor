@@ -347,7 +347,13 @@ document.addEventListener("click", e => {
   if (t.id === "promoBtn") return applyPromo();
   if (t.id === "checkoutBtn") return openCheckout();
   if (t.id === "seeOrders" || t.id === "myOrders") return openOrders();
-  if (t.id === "logout") { logout(); closeAll(); return toast("Chiqildi"); }
+  if (t.id === "logout") {
+    $("#accountBody").innerHTML = `<p style="margin-bottom:14px">Hisobdan chiqishni tasdiqlaysizmi?</p>
+      <div class="form"><button class="btn sun block" id="confirmLogout">Ha</button><button class="btn line block" id="cancelLogout">Yo'q</button></div>`;
+    return;
+  }
+  if (t.id === "confirmLogout") { logout(); closeAll(); return toast("Chiqildi"); }
+  if (t.id === "cancelLogout") return openAccount();
   if (!t.closest(".cat-wrap")) $("#catMenu").hidden = true;
   if (!t.closest(".search")) $("#suggest").hidden = true;
 });

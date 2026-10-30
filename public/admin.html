@@ -60,6 +60,15 @@ async function api(url, opts = {}) {
 }
 let tt;
 function toast(m) { const t = $("#toast"); t.textContent = m; t.hidden = false; clearTimeout(tt); tt = setTimeout(() => t.hidden = true, 2200); }
+function setFormSaving(form, saving) {
+  if (saving) form.dataset.submitting = "true";
+  else delete form.dataset.submitting;
+  const submit = form.querySelector('button[type="submit"]');
+  submit.disabled = saving;
+  submit.textContent = saving ? "Saqlanmoqda..." : "Saqlash";
+  const close = $("#mx");
+  if (close) close.disabled = saving;
+}
 
 function loginView(msg = "") {
   $("#app").innerHTML = `<form class="login form" id="lf"><h2>Admin kirish</h2>
@@ -149,7 +158,7 @@ function slideForm(slide = {}) {
       ${slide.image ? `<img class="image-preview" id="slidePreview" src="${v("image")}" alt="Slayd rasmi ko'rinishi">` : `<img class="image-preview" id="slidePreview" alt="Slayd rasmi ko'rinishi" hidden>`}
       ${slide.image ? `<label style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" name="removeImage"> Rasmni olib tashlash</label>` : ""}
       <label>Ko'rish tugmasi uchun kategoriya<select name="category"><option value="">Tugma ko'rsatilmasin</option>${CATS.map(c => `<option value="${esc(c.id)}" ${c.id === slide.category ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
-      <div class="err" id="se"></div><button class="btn sun block">Saqlash</button></form>`;
+      <div class="err" id="se"></div><button class="btn sun block" type="submit">Saqlash</button></form>`;
   $("#modal").hidden = false;
   $("#mx").onclick = () => $("#modal").hidden = true;
   $("#sf").imageFile.onchange = e => {
@@ -162,7 +171,10 @@ function slideForm(slide = {}) {
   };
   $("#sf").onsubmit = async e => {
     e.preventDefault();
-    const form = e.target, data = Object.fromEntries(new FormData(form));
+    const form = e.target;
+    if (form.dataset.submitting) return;
+    setFormSaving(form, true);
+    const data = Object.fromEntries(new FormData(form));
     delete data.imageFile;
     try {
       const file = form.imageFile.files[0];
@@ -177,7 +189,7 @@ function slideForm(slide = {}) {
         method: slide.id ? "PUT" : "POST", body: data
       });
       $("#modal").hidden = true; toast("Slayd saqlandi"); render();
-    } catch (err) { $("#se").textContent = err.message; }
+    } catch (err) { $("#se").textContent = err.message; setFormSaving(form, false); }
   };
 }
 
@@ -221,12 +233,15 @@ function promoForm(promo = {}) {
       <label>Tugash sanasi (ixtiyoriy)<input name="expiresAt" type="datetime-local" value="${esc(expiry)}"></label>
       <label>Foydalanish limiti (ixtiyoriy)<input name="maxUses" type="number" min="1" step="1" value="${v("maxUses")}"></label>
       ${promo.code ? `<p class="meta">Ishlatilgan: ${promo.usedCount}${promo.maxUses == null ? "" : " / " + promo.maxUses}</p>` : ""}
-      <div class="err" id="promoError"></div><button class="btn sun block">Saqlash</button></form>`;
+      <div class="err" id="promoError"></div><button class="btn sun block" type="submit">Saqlash</button></form>`;
   $("#modal").hidden = false;
   $("#mx").onclick = () => $("#modal").hidden = true;
   $("#promoForm").onsubmit = async e => {
     e.preventDefault();
-    const form = e.target, data = Object.fromEntries(new FormData(form));
+    const form = e.target;
+    if (form.dataset.submitting) return;
+    setFormSaving(form, true);
+    const data = Object.fromEntries(new FormData(form));
     if (data.expiresAt) data.expiresAt = new Date(data.expiresAt).toISOString();
     else data.expiresAt = null;
     if (!data.maxUses) data.maxUses = null;
@@ -235,7 +250,7 @@ function promoForm(promo = {}) {
         method: promo.code ? "PUT" : "POST", body: data
       });
       $("#modal").hidden = true; toast("Promokod saqlandi"); render();
-    } catch (err) { $("#promoError").textContent = err.message; }
+    } catch (err) { $("#promoError").textContent = err.message; setFormSaving(form, false); }
   };
 }
 
@@ -301,7 +316,7 @@ function productForm(p = {}) {
       ${p.image ? `<label style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" name="removeImage"> Rasmni olib tashlash</label>` : ""}
       <label>Tavsif<textarea name="desc" rows="3">${v("desc")}</textarea></label>
       <label style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" name="active" ${p.active === false ? "" : "checked"}> Saytda ko'rsatilsin</label>
-      <div class="err" id="pe"></div><button class="btn sun block">Saqlash</button></form>`;
+      <div class="err" id="pe"></div><button class="btn sun block" type="submit">Saqlash</button></form>`;
   $("#modal").hidden = false;
   $("#mx").onclick = () => $("#modal").hidden = true;
   $("#pf").imageFile.onchange = e => {
@@ -318,10 +333,13 @@ function productForm(p = {}) {
   };
   $("#pf").onsubmit = async e => {
     e.preventDefault();
-    const f = Object.fromEntries(new FormData(e.target)); f.active = e.target.active.checked;
+    const form = e.target;
+    if (form.dataset.submitting) return;
+    setFormSaving(form, true);
+    const f = Object.fromEntries(new FormData(form)); f.active = form.active.checked;
     delete f.imageFile;
     try {
-      const file = e.target.imageFile.files[0];
+      const file = form.imageFile.files[0];
       if (file) f.image = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);
@@ -331,10 +349,12 @@ function productForm(p = {}) {
       f.removeImage = !!e.target.removeImage?.checked;
       await api(p.id ? "/admin/products/" + p.id : "/admin/products", { method: p.id ? "PUT" : "POST", body: f });
       $("#modal").hidden = true; toast("Saqlandi"); render();
-    } catch (err) { $("#pe").textContent = err.message; }
+    } catch (err) { $("#pe").textContent = err.message; setFormSaving(form, false); }
   };
 }
-document.addEventListener("keydown", e => { if (e.key === "Escape") $("#modal").hidden = true; });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && !$("#modalBox form")?.dataset.submitting) $("#modal").hidden = true;
+});
 
 tok() ? start() : loginView();
 </script>
