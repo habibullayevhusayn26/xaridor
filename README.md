@@ -58,6 +58,7 @@ Google akkaunt emailni o'zi tekshiradi; sayt Google parolini so'ramaydi va tasdi
 - Promokodlar admin panelning **Promokodlar** bo'limida ham boshqariladi. Foizli yoki belgilangan summadagi chegirma, tugash sanasi, jami va foydalanuvchi boshiga limit hamda minimal savdo summasi sozlanadi.
 - Faqat akkauntiga tegishli buyurtmada mahsulot bor va buyurtma holati **Yetkazildi** bo'lgan foydalanuvchi baho va sharh yubora oladi. Sharh admin paneldagi **Sharhlar** bo'limida tasdiqlangandan keyin ommaga ko'rinadi. Bir foydalanuvchi har bir mahsulotga bitta sharh qoldiradi.
 - Foydalanuvchi buyurtmalarida holatlar bosqichma-bosqich ko'rsatiladi. **Qayta xarid qilish** oldingi buyurtmadan omborda bor mahsulotlarni savatga qo'shadi.
+- Buyurtma berishda foydalanuvchi xaritadan yetkazib berish nuqtasini belgilaydi yoki brauzer ruxsati bilan joriy joylashuvini aniqlaydi. Hudud/qishloq nomi avtomatik to'ldiriladi, koordinata buyurtmada saqlanadi va mijoz hamda sotuvchiga xaritada ochish havolasi ko'rsatiladi.
 - Brend nomi: `public/index.html`, `public/admin.html`, `public/logo.svg`.
 - Ranglar: `public/style.css` boshidagi `:root`.
 - Dastlabki promokodlar bazaga bir marta XARID10 va YANGI5 sifatida qo'shiladi; keyin admin panel yoki Telegram botdan boshqariladi. XARID10 faqat akkauntning birinchi buyurtmasida va bir marta amal qiladi.

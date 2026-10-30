@@ -2,6 +2,12 @@
 const $ = (s, r = document) => r.querySelector(s);
 const fmt = n => new Intl.NumberFormat("uz-UZ").format(Math.round(n)).replace(/,/g, " ") + " so'm";
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const orderMapUrl = location => {
+  const lat = Number(location?.lat), lng = Number(location?.lng);
+  return Number.isFinite(lat) && Number.isFinite(lng)
+    ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}`
+    : "";
+};
 const store = {
   get(k, d) { try { const v = localStorage.getItem("bz_" + k); return v ? JSON.parse(v) : d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem("bz_" + k, JSON.stringify(v)); } catch {} }
@@ -28,6 +34,8 @@ const state = {
   user: store.get("user", null), promo: store.get("promo", ""), promoInfo: null,
   unreadMessages: 0, cat: null, q: "", onlyFav: false, min: 0, max: 0, sort: "pop"
 };
+let checkoutMap = null;
+let leafletLoad = null;
 const byId = id => PRODUCTS.find(p => p.id === id);
 const hasDiscount = p => Number(p.old) > Number(p.price);
 const disc = p => hasDiscount(p) ? Math.round((1 - p.price / p.old) * 100) : 0;
@@ -51,6 +59,7 @@ $("#toast").onclick = () => {
   action();
 };
 function closeAll() {
+  destroyCheckoutMap();
   $("#cartDrawer").hidden = true; $("#accountDrawer").hidden = true; $("#modal").hidden = true; $("#overlay").hidden = true;
   document.documentElement.classList.remove("overlay-open");
 }
@@ -323,26 +332,44 @@ function openCheckout() {
   if (!Object.keys(state.cart).length) return;
   if (!state.user) { $("#cartDrawer").hidden = true; openAccount(); toast("Buyurtma berish uchun avval kiring"); return; }
   const t = totals(), u = state.user;
+  destroyCheckoutMap();
   $("#cartDrawer").hidden = true;
   showModal(`<h2>Buyurtmani rasmiylashtirish</h2>
     <form class="form" id="coForm">
       <label>Ism-familiya<input name="name" required value="${esc(u.name || "")}"></label>
       <label>Telefon<input name="phone" required placeholder="+998 90 123 45 67" value="${esc(u.phone || "")}"></label>
-      <label>Shahar<select name="city"><option>Toshkent</option><option>Samarqand</option><option>Buxoro</option><option>Andijon</option><option>Namangan</option><option>Farg'ona</option><option>Nukus</option></select></label>
-      <label>Manzil<textarea name="addr" required rows="2" placeholder="Ko'cha, uy, xonadon"></textarea></label>
+      <div class="location-picker">
+        <b>Yetkazib berish joyi</b>
+        <p class="meta">Xaritada manzilingizni belgilang. Qishloq va hudud nomi avtomatik aniqlanadi.</p>
+        <button class="btn line location-button" id="locateBtn" type="button">Joylashuvimni aniqlash</button>
+        <div id="locationMap" class="location-map" role="application" aria-label="Yetkazib berish manzilini xaritada tanlash"></div>
+        <p id="locationStatus" class="meta" role="status" aria-live="polite">Xaritadan nuqtani tanlang yoki joylashuvingizni aniqlang.</p>
+      </div>
+      <input type="hidden" name="city" value="Farg'ona">
+      <input type="hidden" name="lat">
+      <input type="hidden" name="lng">
+      <label>Manzil va mo'ljal<textarea name="addr" required maxlength="300" rows="2" placeholder="Xaritadan nuqta tanlang; kerak bo'lsa ko'cha, uy yoki mo'ljalni aniqlashtiring"></textarea></label>
       <label>To'lov usuli<select name="pay"><option value="Naqd">Yetkazilganda naqd</option><option value="Karta">Karta orqali (Uzcard / Humo)</option><option value="Muddatli">Muddatli to'lov (12 oy)</option></select></label>
       <div class="row total"><span>Jami</span><span>${fmt(t.total)}</span></div>
       <div class="err" id="coErr"></div>
       <button class="btn sun block" type="submit">Buyurtmani tasdiqlash</button>
     </form>`);
-  $("#coForm").addEventListener("submit", async e => {
+  const form = $("#coForm");
+  initCheckoutMap(form);
+  form.addEventListener("submit", async e => {
     e.preventDefault();
+    const lat = Number(form.elements.lat.value), lng = Number(form.elements.lng.value);
+    if (!form.elements.lat.value || !form.elements.lng.value || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+      $("#locationStatus").textContent = "Davom etish uchun xaritada yetkazib berish nuqtasini tanlang.";
+      return;
+    }
     const f = Object.fromEntries(new FormData(e.target));
     const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
     try {
       const order = await api("/orders", { method: "POST", body: {
         ...f, promo: state.promo, items: Object.entries(state.cart).map(([id, q]) => ({ id: +id, q })) } });
       state.cart = {}; state.promo = ""; persist(); loadProducts();
+      destroyCheckoutMap();
       showModal(`<div class="empty" style="grid-column:auto"><div class="done">${ic("check", 72)}</div><b>Buyurtma qabul qilindi!</b>
         Buyurtma raqami: <b style="display:inline">${order.id}</b><br>Operator tez orada ${esc(order.phone)} raqamiga qo'ng'iroq qiladi.
         <br><br><button class="btn dark" id="seeOrders">Buyurtmalarim</button></div>`);
@@ -350,6 +377,133 @@ function openCheckout() {
       if (err.status === 401) { logout(); closeAll(); openAccount(); }
       $("#coErr") && ($("#coErr").textContent = err.message); btn.disabled = false;
     }
+  });
+}
+
+function destroyCheckoutMap() {
+  if (!checkoutMap) return;
+  checkoutMap.remove();
+  checkoutMap = null;
+}
+
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (leafletLoad) return leafletLoad;
+  if (!$("#leafletStyle")) {
+    const style = document.createElement("link");
+    style.id = "leafletStyle";
+    style.rel = "stylesheet";
+    style.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.append(style);
+  }
+  leafletLoad = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    script.onload = () => resolve(window.L);
+    script.onerror = () => {
+      script.remove();
+      leafletLoad = null;
+      reject(new Error("Xarita kutubxonasini yuklab bo'lmadi."));
+    };
+    document.head.append(script);
+  });
+  return leafletLoad;
+}
+
+function initCheckoutMap(form) {
+  const status = $("#locationStatus"), mapElement = $("#locationMap");
+  const locateButton = $("#locateBtn"), addressInput = form.elements.addr;
+  let marker = null, lookupId = 0, lookupQueue = null, lookupRunning = false, lastLookup = 0;
+  const setStatus = message => { if (status) status.textContent = message; };
+  const lookupAddress = async (point, id) => {
+    const params = new URLSearchParams({
+      format: "jsonv2", lat: String(point.lat), lon: String(point.lng),
+      zoom: "18", addressdetails: "1", "accept-language": "uz,ru,en"
+    });
+    const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params}`);
+    if (!response.ok) throw new Error("Hudud nomini aniqlab bo'lmadi.");
+    const result = await response.json();
+    if (id !== lookupId) return;
+    const a = result.address || {};
+    const locality = a.village || a.hamlet || a.town || a.city || a.municipality || a.county || a.state;
+    if (locality) form.elements.city.value = locality.slice(0, 40);
+    const street = [a.road, a.house_number].filter(Boolean).join(" ");
+    const parts = [street, a.neighbourhood, a.suburb, a.village, a.hamlet, a.town,
+      a.city_district, a.city, a.county, a.state, a.country].filter(Boolean);
+    const uniqueParts = parts.filter((part, index) =>
+      parts.findIndex(value => value.toLocaleLowerCase() === part.toLocaleLowerCase()) === index);
+    if (addressInput.dataset.edited !== "true")
+      addressInput.value = uniqueParts.join(", ") || result.display_name || "";
+    setStatus(`Tanlangan hudud: ${locality || result.display_name || "Manzil aniqlandi"}.`);
+  };
+  const processLookupQueue = async () => {
+    if (lookupRunning) return;
+    lookupRunning = true;
+    while (lookupQueue) {
+      const delay = Math.max(0, 1100 - (Date.now() - lastLookup));
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+      const task = lookupQueue;
+      lookupQueue = null;
+      if (task.id !== lookupId) continue;
+      lastLookup = Date.now();
+      try {
+        await lookupAddress(task.point, task.id);
+      } catch {
+        if (task.id === lookupId)
+          setStatus("Nuqta tanlandi, lekin hudud nomini aniqlab bo'lmadi. Manzilni matn bilan aniqlashtiring.");
+      }
+    }
+    lookupRunning = false;
+  };
+  const selectPoint = point => {
+    lookupId++;
+    form.elements.lat.value = point.lat.toFixed(6);
+    form.elements.lng.value = point.lng.toFixed(6);
+    addressInput.dataset.edited = "false";
+    if (checkoutMap) {
+      if (marker) marker.setLatLng(point);
+      else marker = window.L.marker(point).addTo(checkoutMap);
+    }
+    setStatus("Nuqta tanlandi. Hudud nomi aniqlanmoqda...");
+    lookupQueue = { point, id: lookupId };
+    processLookupQueue();
+  };
+
+  addressInput.addEventListener("input", () => { addressInput.dataset.edited = "true"; });
+  locateButton.addEventListener("click", () => {
+    if (!navigator.geolocation) {
+      setStatus("Bu brauzer joylashuvni aniqlashni qo'llab-quvvatlamaydi. Xaritadan nuqta tanlang.");
+      return;
+    }
+    locateButton.disabled = true;
+    setStatus("Joylashuvingiz aniqlanmoqda...");
+    navigator.geolocation.getCurrentPosition(position => {
+      locateButton.disabled = false;
+      const point = { lat: position.coords.latitude, lng: position.coords.longitude };
+      if (checkoutMap) checkoutMap.setView(point, 17);
+      selectPoint(point);
+    }, error => {
+      locateButton.disabled = false;
+      const message = error.code === error.PERMISSION_DENIED
+        ? "Joylashuvga ruxsat berilmadi. Ruxsatni yoqing yoki xaritadan nuqta tanlang."
+        : error.code === error.TIMEOUT
+          ? "Joylashuvni aniqlash vaqti tugadi. Qayta urinib ko'ring yoki xaritadan tanlang."
+          : "Joylashuv aniqlanmadi. Xaritadan nuqta tanlang.";
+      setStatus(message);
+    }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
+  });
+
+  loadLeaflet().then(L => {
+    if (!mapElement.isConnected || $("#modal").hidden) return;
+    checkoutMap = L.map(mapElement).setView([40.38, 71.78], 11);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(checkoutMap);
+    checkoutMap.on("click", event => selectPoint(event.latlng));
+    requestAnimationFrame(() => checkoutMap?.invalidateSize());
+  }).catch(error => {
+    setStatus(`${error.message} Brauzer joylashuviga ruxsat bering yoki sahifani qayta yuklang.`);
   });
 }
 
@@ -361,6 +515,7 @@ async function openOrders() {
   $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button><h2>Buyurtmalarim</h2>` + (list.length ? list.map(o => `
     <div class="order"><div class="row"><b>№ ${o.id}</b><span class="status">${esc(o.status)}</span></div>
     <div class="meta">${new Date(o.created).toLocaleString("uz-UZ")} · ${esc(o.city)}, ${esc(o.addr)} · ${esc(o.pay)}</div>
+    ${orderMapUrl(o.location) ? `<p><a href="${orderMapUrl(o.location)}" target="_blank" rel="noopener noreferrer">Xaritada ochish</a></p>` : ""}
     ${orderTracker(o.status)}
     <div style="margin:8px 0">${o.items.map(i => `<div class="it">${ic(i.icon, 18)}<span>${esc(i.name)} × ${i.q}</span></div>`).join("")}</div>
     <div class="row total"><span>Jami</span><span>${fmt(o.total)}</span></div>

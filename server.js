@@ -321,7 +321,7 @@ async function sendOrderToTelegram(o) {
       const title = target.kind === "seller"
         ? `Yangi buyurtma ${o._id}\nDo'kon: ${target.storeName}`
         : `Yangi buyurtma ${o._id}`;
-      const text = `${title}\n\n${o.name}\n${o.phone}\n${o.city}, ${o.addr}\nTo'lov: ${o.pay}${o.promo ? "\nPromokod: " + o.promo : ""}\n\n${lines}\n\nMahsulotlar jami: ${fmtSum(subtotal)}`;
+      const text = `${title}\n\n${o.name}\n${o.phone}\n${o.city}, ${o.addr}${orderMapLink(o)}\nTo'lov: ${o.pay}${o.promo ? "\nPromokod: " + o.promo : ""}\n\n${lines}\n\nMahsulotlar jami: ${fmtSum(subtotal)}`;
       await tgCall("sendMessage", { chat_id: target.chatId, text });
       await orders.updateOne({ _id: o._id }, { $addToSet: { tgSentTo: target.key } });
     }
@@ -509,13 +509,20 @@ async function findSellerOrder(seller, orderId) {
   return sellerItems.length ? { order, items: sellerItems } : null;
 }
 
+function orderMapLink(order) {
+  const { location } = order;
+  if (!location || !Number.isFinite(location.lat) || !Number.isFinite(location.lng)) return "";
+  const { lat, lng } = location;
+  return `\nXaritada ochish: https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}`;
+}
+
 function sellerOrderDetails(seller, result) {
   const { order, items } = result;
   const itemText = items.map(item =>
     `• ${item.name} × ${item.q} — ${fmtSum(item.price * item.q)}`
   ).join("\n");
   return {
-    text: `Buyurtma ${order._id}\nDo'kon: ${seller.storeName}\nUmumiy holati: ${order.status}\n\nMijoz: ${order.name}\nTelefon: ${order.phone}\nManzil: ${order.city}, ${order.addr}\nTo'lov: ${order.pay}\n\nSizning mahsulotlaringiz:\n${itemText}\n\nEslatma: status o'zgarsa butun buyurtmaga ta'sir qiladi.`,
+    text: `Buyurtma ${order._id}\nDo'kon: ${seller.storeName}\nUmumiy holati: ${order.status}\n\nMijoz: ${order.name}\nTelefon: ${order.phone}\nManzil: ${order.city}, ${order.addr}${orderMapLink(order)}\nTo'lov: ${order.pay}\n\nSizning mahsulotlaringiz:\n${itemText}\n\nEslatma: status o'zgarsa butun buyurtmaga ta'sir qiladi.`,
     replyMarkup: {
       inline_keyboard: STATUSES.map((status, index) => [{
         text: `${order.status === status ? "✅ " : ""}${status}`,
@@ -532,6 +539,7 @@ function sellerOrderOut(order, items) {
     phone: order.phone,
     city: order.city,
     addr: order.addr,
+    location: order.location || null,
     pay: order.pay,
     total: items.reduce((sum, item) => sum + item.price * item.q, 0),
     status: order.status,
@@ -759,7 +767,7 @@ async function findTelegramOrder(query) {
   const order = await orders.findOne({ _id: id });
   if (!order) return null;
   const itemLines = order.items.map(item => `• ${item.name} × ${item.q} — ${fmtSum(item.price * item.q)}`);
-  const header = `Buyurtma ${order._id}\nHolati: ${order.status}\nSana: ${new Date(order.created).toLocaleString("uz-UZ")}\n\nMijoz: ${order.name}\nTelefon: ${order.phone}\nManzil: ${order.city}, ${order.addr}\nTo'lov: ${order.pay}${order.promo ? `\nPromokod: ${order.promo}` : ""}\n\n`;
+  const header = `Buyurtma ${order._id}\nHolati: ${order.status}\nSana: ${new Date(order.created).toLocaleString("uz-UZ")}\n\nMijoz: ${order.name}\nTelefon: ${order.phone}\nManzil: ${order.city}, ${order.addr}${orderMapLink(order)}\nTo'lov: ${order.pay}${order.promo ? `\nPromokod: ${order.promo}` : ""}\n\n`;
   let items = "";
   let shown = 0;
   for (const line of itemLines) {
@@ -1561,7 +1569,8 @@ async function publicProductListOut(list) {
     sellerStoreName: product.sellerStoreName || storeNames.get(String(product.sellerId)) || null
   }));
 }
-const orderOut = o => ({ id: o._id, name: o.name, phone: o.phone, city: o.city, addr: o.addr, pay: o.pay,
+const orderOut = o => ({ id: o._id, name: o.name, phone: o.phone, city: o.city, addr: o.addr,
+  location: o.location || null, pay: o.pay,
   total: o.total, promo: o.promo, status: o.status,
   items: o.items.map(({ id, name, icon, q, price }) => ({ id, name, icon, q, price })),
   created: o.created.toISOString(), tgSent: !!o.tgSent });
@@ -1863,8 +1872,14 @@ app.post("/api/orders", orderLimiter, auth(), ah(async (req, res) => {
   const phone = normPhone(b.phone);
   const city = String(b.city || "").trim().slice(0, 40);
   const addr = String(b.addr || "").trim().slice(0, 300);
+  const lat = Number(b.lat), lng = Number(b.lng);
+  const coordinatesProvided = b.lat !== undefined && b.lat !== null && String(b.lat).trim() !== "" &&
+    b.lng !== undefined && b.lng !== null && String(b.lng).trim() !== "";
+  const location = coordinatesProvided && Number.isFinite(lat) && lat >= -90 && lat <= 90 &&
+    Number.isFinite(lng) && lng >= -180 && lng <= 180 ? { lat, lng } : null;
   const pay = PAYS.includes(b.pay) ? b.pay : null;
-  if (name.length < 2 || !city || addr.length < 3 || !pay) return res.status(400).json({ error: "Barcha maydonlarni to'ldiring." });
+  if (name.length < 2 || !city || addr.length < 3 || !pay || !location)
+    return res.status(400).json({ error: "Barcha maydonlarni to'ldiring va xaritada manzilni tanlang." });
   if (!phone) return res.status(400).json({ error: "Telefon raqami noto'g'ri." });
   if (!Array.isArray(b.items) || !b.items.length || b.items.length > 50) return res.status(400).json({ error: "Savat bo'sh." });
 
@@ -1942,7 +1957,7 @@ app.post("/api/orders", orderLimiter, auth(), ah(async (req, res) => {
   let order;
   try {
     for (let k = 0; k < 5 && !order; k++) {
-      const doc = { _id: "XR" + crypto.randomInt(1000000, 9999999), userId: req.user._id, name, phone, city, addr, pay,
+      const doc = { _id: "XR" + crypto.randomInt(1000000, 9999999), userId: req.user._id, name, phone, city, addr, location, pay,
         total, promo: selectedPromo?.code || null, status: STATUSES[0], items, created: new Date(), tgSent: false };
       try { await orders.insertOne(doc); order = doc; }
       catch (e) { if (e.code !== 11000) throw e; }

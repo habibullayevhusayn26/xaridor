@@ -327,7 +327,7 @@ async function viewOrders() {
     </form>
     <div class="panel">${list.length ? `<table><tr><th>№ / sana</th><th>Mijoz</th><th>Mahsulotlar</th><th>Jami</th><th>Holat</th></tr>` +
     list.map(o => `<tr><td><b>${o.id}</b><br><small class="meta">${new Date(o.created).toLocaleString("uz-UZ")}</small></td>
-      <td>${esc(o.name)}<br>${esc(o.phone)}<br><small class="meta">${esc(o.city)}, ${esc(o.addr)}<br>${esc(o.pay)}${o.promo ? " · " + esc(o.promo) : ""}</small></td>
+      <td>${esc(o.name)}<br>${esc(o.phone)}<br><small class="meta">${esc(o.city)}, ${esc(o.addr)}<br>${o.location ? `<a href="https://www.openstreetmap.org/?mlat=${encodeURIComponent(o.location.lat)}&mlon=${encodeURIComponent(o.location.lng)}#map=17/${encodeURIComponent(o.location.lat)}/${encodeURIComponent(o.location.lng)}" target="_blank" rel="noopener noreferrer">Xaritada ochish</a><br>` : ""}${esc(o.pay)}${o.promo ? " · " + esc(o.promo) : ""}</small></td>
       <td>${o.items.map(i => `<div class="it" style="display:flex;gap:6px;align-items:center">${ic(i.icon, 16)}${esc(i.name)} × ${i.q}</div>`).join("")}</td>
       <td><b>${fmt(o.total)}</b></td>
       <td><select data-oid="${o.id}">${STATUSES.map(s => `<option ${s === o.status ? "selected" : ""}>${s}</option>`).join("")}</select></td></tr>`).join("") + `</table>`

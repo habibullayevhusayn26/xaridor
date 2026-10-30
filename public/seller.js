@@ -4,6 +4,12 @@ const esc = value => String(value ?? "").replace(/[&<>"']/g, character => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 }[character]));
 const fmt = value => new Intl.NumberFormat("uz-UZ").format(Math.round(value)).replace(/,/g, " ") + " so'm";
+const orderMapUrl = location => {
+  const lat = Number(location?.lat), lng = Number(location?.lng);
+  return Number.isFinite(lat) && Number.isFinite(lng)
+    ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}`
+    : "";
+};
 const app = $("#sellerApp");
 let token = localStorage.getItem("bz_seller_token");
 let categories = [];
@@ -311,7 +317,7 @@ function renderSellerOrder(order) {
     <h3>Buyurtma ${esc(order.id)}</h3>
     <p><b>Holati:</b> ${esc(order.status)} · <b>Jami:</b> ${fmt(order.total)}</p>
     <p><b>Mijoz:</b> ${esc(order.name)} · ${esc(order.phone)}<br>
-      <b>Manzil:</b> ${esc(order.city)}, ${esc(order.addr)}<br><b>To'lov:</b> ${esc(order.pay)}</p>
+      <b>Manzil:</b> ${esc(order.city)}, ${esc(order.addr)}${orderMapUrl(order.location) ? `<br><a href="${orderMapUrl(order.location)}" target="_blank" rel="noopener noreferrer">Xaritada ochish</a>` : ""}<br><b>To'lov:</b> ${esc(order.pay)}</p>
     <ul>${order.items.map(item => `<li>${esc(item.name)} × ${item.q} — ${fmt(item.price * item.q)}</li>`).join("")}</ul>
     <p class="seller-notice">Status o'zgartirilganda butun buyurtmaning, jumladan boshqa sotuvchilarga tegishli mahsulotlar holati ham o'zgaradi.</p>
     <form class="seller-search-row" id="sellerOrderStatusForm">

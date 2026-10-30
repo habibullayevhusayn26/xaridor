@@ -186,6 +186,11 @@ html.overlay-open{overflow:hidden}
 .form label{display:grid;gap:4px;font-size:13px;color:var(--mute)}
 .form input,.form select,.form textarea{width:100%;max-width:100%;min-width:0;padding:11px 12px;border:1.5px solid var(--line);border-radius:10px;color:var(--ink);background:#fff}
 .form input:focus,.form select:focus,.form textarea:focus{border-color:var(--teal);outline:0;box-shadow:0 0 0 3px rgba(8,127,117,.1)}
+.location-picker{display:grid;gap:8px}
+.location-map{width:100%;height:280px;overflow:hidden;border:1px solid var(--line);border-radius:12px;background:var(--soft)}
+.location-map .leaflet-container{width:100%;height:100%;font:inherit}
+.location-button{justify-self:start}
+.location-picker .meta{font-size:12px}
 .err{color:var(--coral);font-size:13px;min-height:18px}
 .tabs{display:flex;gap:6px;margin-bottom:14px}
 .tabs button{flex:1;padding:10px;border-radius:10px;background:var(--bg);font-weight:600}
