@@ -411,16 +411,37 @@ const telegramSellerKeyboard = {
   resize_keyboard: true,
   is_persistent: true
 };
+const telegramAdminSellerKeyboard = {
+  keyboard: [...telegramKeyboard.keyboard, ...telegramSellerKeyboard.keyboard],
+  resize_keyboard: true,
+  is_persistent: true
+};
 const telegramMenu = () => ({ text: "Kerakli qidiruv turini tanlang:", reply_markup: telegramKeyboard });
-const telegramSend = (chatId, text, replyMarkup = telegramKeyboard) =>
-  tgCall("sendMessage", { chat_id: chatId, text, reply_markup: replyMarkup });
-const telegramSellerSend = (chatId, text, replyMarkup = telegramSellerKeyboard) =>
-  tgCall("sendMessage", { chat_id: chatId, text, reply_markup: replyMarkup });
+async function defaultTelegramKeyboard(chatId, fallback) {
+  if (String(chatId) !== TG_ADMIN_ID) return fallback;
+  const seller = await sellers.findOne({
+    telegramChatId: String(chatId), status: "approved"
+  }, { projection: { _id: 1 } });
+  return seller ? telegramAdminSellerKeyboard : fallback;
+}
+const telegramSend = async (chatId, text, replyMarkup = null) =>
+  tgCall("sendMessage", {
+    chat_id: chatId,
+    text,
+    reply_markup: replyMarkup || await defaultTelegramKeyboard(chatId, telegramKeyboard)
+  });
+const telegramSellerSend = async (chatId, text, replyMarkup = null) =>
+  tgCall("sendMessage", {
+    chat_id: chatId,
+    text,
+    reply_markup: replyMarkup || await defaultTelegramKeyboard(chatId, telegramSellerKeyboard)
+  });
 
 async function showTelegramSellerMenu(chatId, seller) {
+  const keyboard = await defaultTelegramKeyboard(chatId, telegramSellerKeyboard);
   return telegramSellerSend(chatId,
     `${seller.storeName} sotuvchi kabineti\n\nBu bot orqali faqat o'z mahsulotlaringizni ko'ring va boshqaring.`,
-    telegramSellerKeyboard);
+    keyboard);
 }
 
 async function showTelegramSellerProducts(chatId, seller, messageId = null, page = 0) {
@@ -445,7 +466,9 @@ async function showTelegramSellerProducts(chatId, seller, messageId = null, page
       ...(page > 0 ? [{ text: "⬅️ Oldingi", callback_data: `sp:${page - 1}:page` }] : []),
       ...(page + 1 < pageCount ? [{ text: "Keyingi ➡️", callback_data: `sp:${page + 1}:page` }] : [])
     ]);
-  const replyMarkup = list.length ? { inline_keyboard: keyboard } : telegramSellerKeyboard;
+  const replyMarkup = list.length
+    ? { inline_keyboard: keyboard }
+    : await defaultTelegramKeyboard(chatId, telegramSellerKeyboard);
   if (messageId) {
     await tgCall("editMessageText", { chat_id: chatId, message_id: messageId, text, reply_markup });
   } else {
@@ -521,13 +544,20 @@ async function showTelegramSellerOrder(chatId, seller, orderId, messageId = null
   const found = await findSellerOrder(seller, orderId);
   const text = found
     ? sellerOrderDetails(seller, found)
-    : { text: "Bu ID bo'yicha sizga tegishli buyurtma topilmadi.", replyMarkup: telegramSellerKeyboard };
+    : {
+      text: "Bu ID bo'yicha sizga tegishli buyurtma topilmadi.",
+      replyMarkup: await defaultTelegramKeyboard(chatId, telegramSellerKeyboard)
+    };
   if (messageId) {
     await tgCall("editMessageText", {
       chat_id: chatId, message_id: messageId, text: text.text, reply_markup: text.replyMarkup
     });
   } else {
-    await tgCall("sendMessage", { chat_id: chatId, ...text });
+    await tgCall("sendMessage", {
+      chat_id: chatId,
+      text: text.text,
+      reply_markup: text.replyMarkup
+    });
   }
 }
 
@@ -1214,7 +1244,7 @@ async function handleTelegramUpdate(update) {
       if (!seller) return sellerReply("Telegram ulash kodi eskirgan, ishlatilgan yoki sotuvchi arizasi hali tasdiqlanmagan. Saytdagi sotuvchi kabinetidan yangi havola oling.");
       return sellerReply(
         `Telegram ulandi!\n${seller.storeName} do'konining yangi buyurtmalari shu chatga yuboriladi.`,
-        telegramSellerKeyboard
+        await defaultTelegramKeyboard(message.chat.id, telegramSellerKeyboard)
       );
     } catch (error) {
       if (error.code === 11000) return sellerReply("Bu Telegram akkaunti boshqa sotuvchiga ulangan.");
@@ -1225,7 +1255,34 @@ async function handleTelegramUpdate(update) {
     telegramChatId: String(message.from?.id),
     status: "approved"
   });
-  if (linkedSeller)
+  const isTelegramAdmin = String(message.from?.id) === TG_ADMIN_ID;
+  const sellerMenuAction = [
+    TELEGRAM_SELLER_PRODUCTS_BUTTON,
+    TELEGRAM_SELLER_PRODUCT_SEARCH_BUTTON,
+    TELEGRAM_SELLER_ORDER_SEARCH_BUTTON,
+    TELEGRAM_SELLER_HOME_BUTTON
+  ].includes(text) || ["product", "mahsulot", "order"].includes(command);
+  const adminMenuAction = [
+    TELEGRAM_USER_BUTTON,
+    TELEGRAM_ORDER_BUTTON,
+    TELEGRAM_PROMOS_BUTTON,
+    TELEGRAM_ADD_PROMO_BUTTON,
+    TELEGRAM_REPORT_BUTTON,
+    TELEGRAM_MESSAGE_STATS_BUTTON,
+    TELEGRAM_BROADCAST_BUTTON
+  ].includes(text) || [
+    "start", "help", "cancel", "report", "messagestats", "xabarstatistika",
+    "broadcast", "promos", "promokodlar", "addpromo", "promokod", "editpromo",
+    "promo", "user", "search", "qidir", "buyurtma"
+  ].includes(command);
+  const sellerFlowPending = telegramSellerFlows.has(String(message.chat.id));
+  const adminFlowPending = telegramSearches.has(String(message.chat.id)) ||
+    telegramPromoFlows.has(String(message.chat.id)) ||
+    telegramMessageFlows.has(String(message.chat.id)) ||
+    telegramBroadcastFlows.has(String(message.chat.id));
+  if (linkedSeller && (!isTelegramAdmin ||
+      sellerMenuAction ||
+      (sellerFlowPending && !adminMenuAction && !adminFlowPending)))
     return handleTelegramSellerMessage(message, linkedSeller, command, text);
   if (String(message.from?.id) !== TG_ADMIN_ID) {
     if (text.startsWith("/"))
@@ -1253,6 +1310,7 @@ async function handleTelegramUpdate(update) {
     return;
   }
   if (command === "cancel") {
+    telegramSellerFlows.delete(chatId);
     telegramSearches.delete(chatId);
     telegramPromoFlows.delete(chatId);
     telegramMessageFlows.delete(chatId);
