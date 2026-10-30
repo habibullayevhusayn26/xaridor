@@ -60,10 +60,8 @@ function openOverlay() {
 
 /* ---------- catalog UI ---------- */
 function renderStatic() {
-  $("#catMenu").innerHTML = CATEGORIES.map(c => `<button data-cat="${c.id}">${ic(c.icon, 20)}${c.name}</button>`).join("");
   $("#chips").innerHTML = `<button class="chip" data-cat="">Hammasi</button>` +
     CATEGORIES.map(c => `<button class="chip" data-cat="${c.id}">${c.name}</button>`).join("");
-  $("#catGrid").innerHTML = CATEGORIES.map(c => `<button class="cat-tile" data-cat="${c.id}"><span>${ic(c.icon, 30)}</span>${c.name}</button>`).join("");
 }
 
 function filtered() {
@@ -105,11 +103,10 @@ function renderGrid() {
   $("#title").textContent = state.onlyFav ? "Sevimlilar" : state.q ? `«${state.q}» bo'yicha natijalar` : c ? c.name : "Barcha mahsulotlar";
   $("#grid").innerHTML = list.length ? list.map(cardHTML).join("") :
     `<div class="empty"><b>Hech narsa topilmadi</b>${state.onlyFav ? "Yurakcha belgisini bosib mahsulotni saqlang." : "Filtrlarni o'zgartirib ko'ring."}</div>`;
-  document.querySelectorAll("[data-cat]").forEach(b => {
-    if (b.classList.contains("chip")) b.classList.toggle("on", (b.dataset.cat || null) === state.cat && !state.onlyFav);
+  document.querySelectorAll("#chips .chip").forEach(button => {
+    button.classList.toggle("on", (button.dataset.cat || null) === state.cat && !state.onlyFav);
   });
-  $("#catGrid").hidden = !!(state.cat || state.q || state.onlyFav);
-  $("#hero").hidden = $("#catGrid").hidden;
+  $("#hero").hidden = !!(state.cat || state.q || state.onlyFav);
 }
 
 function updateBadges() {
@@ -523,7 +520,21 @@ function goSlide(i) {
 function startSlider() { clearInterval(st); if (SLIDES.length > 1 && !matchMedia("(prefers-reduced-motion:reduce)").matches) st = setInterval(() => goSlide(si + 1), 5000); }
 
 /* ---------- navigation / search ---------- */
-function setCat(c) { state.cat = c || null; state.q = ""; state.onlyFav = false; $("#q").value = ""; $("#catMenu").hidden = true; closeAll(); renderGrid(); scrollTo({ top: 0, behavior: "smooth" }); }
+function setCat(c) {
+  state.cat = c || null; state.q = ""; state.onlyFav = false; $("#q").value = "";
+  closeAll(); renderGrid();
+  if (matchMedia("(max-width:860px)").matches) {
+    const chips = $("#chips"), selected = $("#chips .chip.on");
+    if (selected) {
+      chips.style.setProperty("--chip-edge-space", `${Math.max(0, (chips.clientWidth - selected.offsetWidth) / 2)}px`);
+      const offset = selected.getBoundingClientRect().left - chips.getBoundingClientRect().left + chips.scrollLeft;
+      const left = offset - (chips.clientWidth - selected.offsetWidth) / 2;
+      if (matchMedia("(prefers-reduced-motion:reduce)").matches) chips.scrollLeft = left;
+      else chips.scrollTo({ left, behavior: "smooth" });
+    }
+  }
+  scrollTo({ top: 0, behavior: "smooth" });
+}
 function doSearch(q) { state.q = q.trim(); state.cat = null; state.onlyFav = false; $("#suggest").hidden = true; renderGrid(); }
 
 /* ---------- events ---------- */
@@ -547,7 +558,7 @@ document.addEventListener("click", e => {
   if (accountAction?.id === "messagesBtn" || accountAction?.id === "accountMessages") return openMessages();
   if (accountAction?.id === "accountFavorites") {
     state.onlyFav = true; state.cat = null; state.q = ""; $("#q").value = "";
-    $("#catMenu").hidden = true; closeAll(); renderGrid(); scrollTo({ top: 0, behavior: "smooth" }); return;
+    closeAll(); renderGrid(); scrollTo({ top: 0, behavior: "smooth" }); return;
   }
   if (accountAction?.id === "accountCart") {
     $("#accountDrawer").hidden = true;
@@ -560,10 +571,8 @@ document.addEventListener("click", e => {
   }
   if (t.id === "confirmLogout") { logout(); closeAll(); return toast("Chiqildi"); }
   if (t.id === "cancelLogout") return openAccount();
-  if (!t.closest(".cat-wrap")) $("#catMenu").hidden = true;
   if (!t.closest(".search")) $("#suggest").hidden = true;
 });
-$("#catBtn").onclick = e => { e.stopPropagation(); $("#catMenu").hidden = !$("#catMenu").hidden; };
 $("#brand").onclick = e => { e.preventDefault(); setCat(null); };
 $("#cartBtn").onclick = openCart;
 $("#accBtn").onclick = () => openAccount();
