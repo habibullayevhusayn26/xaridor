@@ -29,7 +29,8 @@ const state = {
   unreadMessages: 0, cat: null, q: "", onlyFav: false, min: 0, max: 0, sort: "pop"
 };
 const byId = id => PRODUCTS.find(p => p.id === id);
-const disc = p => Math.round((1 - p.price / p.old) * 100);
+const hasDiscount = p => Number(p.old) > Number(p.price);
+const disc = p => hasDiscount(p) ? Math.round((1 - p.price / p.old) * 100) : 0;
 
 /* ---------- toast / overlay ---------- */
 let tt;
@@ -84,14 +85,14 @@ function cardHTML(p) {
   const fav = state.favs.includes(p.id);
   return `<article class="card">
     <div class="pic" style="background:${p.color}" data-open="${p.id}">
-      <span class="badge">-${disc(p)}%</span>${p.image ? `<img class="product-photo" src="${esc(p.image)}" alt="${esc(p.name)}">` : ic(p.icon, 84)}
+      ${hasDiscount(p) ? `<span class="badge">-${disc(p)}%</span>` : ""}${p.image ? `<img class="product-photo" src="${esc(p.image)}" alt="${esc(p.name)}">` : ic(p.icon, 84)}
       <button class="heart ${fav ? "on" : ""}" data-fav="${p.id}" aria-label="Sevimlilarga qo'shish">${ic("heart", 18, fav)}</button>
     </div>
     <div class="info">
       <div class="name" data-open="${p.id}">${esc(p.name)}</div>
       ${p.sellerStoreName ? `<div class="seller-byline">Sotuvchi: <b>${esc(p.sellerStoreName)}</b></div>` : ""}
       <div class="meta"><b>${ic("star", 13, true)} ${p.rating}</b> · ${p.sold.toLocaleString("uz-UZ")} ta sotilgan</div>
-      <div class="price">${fmt(p.price)}<span class="old">${fmt(p.old)}</span></div>
+      <div class="price">${fmt(p.price)}${hasDiscount(p) ? `<span class="old">${fmt(p.old)}</span>` : ""}</div>
       <div class="inst">Oyiga ${fmt(p.price / 12)} dan · 12 oy</div>
       <button class="add" data-add="${p.id}" ${p.stock <= 0 ? "disabled" : ""}>${p.stock <= 0 ? "Tugagan" : "Savatga"}</button>
     </div></article>`;
@@ -240,7 +241,7 @@ function openProduct(id, keep) {
       <h2>${esc(p.name)}</h2>
       ${p.sellerStoreName ? `<div class="seller-byline">Sotuvchi: <b>${esc(p.sellerStoreName)}</b></div>` : ""}
       <div class="meta"><b>${ic("star", 13, true)} ${p.rating}</b> · ${p.sold.toLocaleString("uz-UZ")} ta sotilgan</div>
-      <div class="price" style="font-size:26px">${fmt(p.price)}<span class="old">${fmt(p.old)}</span></div>
+      <div class="price" style="font-size:26px">${fmt(p.price)}${hasDiscount(p) ? `<span class="old">${fmt(p.old)}</span>` : ""}</div>
       <div class="inst">Oyiga ${fmt(p.price / 12)} dan · 12 oy</div>
       <p>${esc(p.desc)}</p>
       <button class="btn sun block" data-add="${p.id}" ${p.stock <= 0 ? "disabled" : ""}>${p.stock <= 0 ? "Omborda yo'q" : "Savatga qo'shish"}</button>

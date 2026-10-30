@@ -128,8 +128,8 @@ html.overlay-open{overflow:hidden}
 .box h2{margin-bottom:14px}
 .pd{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;min-width:0}
 .pd>*{min-width:0;max-width:100%}
-.pd .big{height:300px;border-radius:16px;display:grid;place-items:center;overflow:hidden;font-size:140px}
-.pd .big .product-photo{border-radius:16px}
+.pd .big{height:auto;max-height:min(300px,60vh);align-self:start;border-radius:16px;display:grid;place-items:center;overflow:hidden;font-size:140px}
+.pd .big .product-photo{width:auto;height:auto;max-width:100%;max-height:min(300px,60vh);object-fit:contain;border-radius:16px}
 .image-preview{display:block;width:100%;height:220px;max-width:100%;max-height:220px;object-fit:contain;background:var(--bg);border-radius:10px}
 .form{display:grid;gap:12px;min-width:0}
 .form label{display:grid;gap:4px;font-size:13px;color:var(--mute)}
@@ -210,7 +210,7 @@ html.overlay-open{overflow:hidden}
   .slide .btn{padding:clamp(4px,1vw,8px) clamp(8px,2vw,14px);font-size:clamp(8px,1.5vw,13px);border-radius:8px}
   .slide .big{font-size:clamp(22px,8vw,80px)}
   .slide .big .ic{width:clamp(22px,8vw,80px);height:clamp(22px,8vw,80px)}
-  .pd{grid-template-columns:1fr}.pd .big{height:200px;font-size:100px}
+  .pd{grid-template-columns:1fr}.pd .big{max-height:min(200px,40vh);font-size:100px}.pd .big .product-photo{max-height:min(200px,40vh)}
 }
 @media(max-width:520px){
   .strip{font-size:11px;line-height:1.25;padding:6px 8px}

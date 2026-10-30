@@ -408,7 +408,7 @@ async function viewProducts() {
   $("#view").innerHTML = `<div style="display:flex;justify-content:flex-end"><button class="btn dark" id="newP">+ Mahsulot qo'shish</button></div>
     <div class="panel"><table><tr><th></th><th>Nomi</th><th>Kategoriya</th><th>Narx</th><th>Ombor</th><th></th></tr>` +
     list.map(p => `<tr class="${p.active ? "" : "off"}"><td><div class="product-thumb" style="background:${p.color}">${p.image ? `<img src="${esc(p.image)}" alt="">` : ic(p.icon, 28)}</div></td><td>${esc(p.name)}${p.active ? "" : "<br><small class='meta'>yashirin</small>"}</td>
-      <td>${esc((CATS.find(c => c.id === p.cat) || {}).name || p.cat)}</td><td>${fmt(p.price)}<br><small class="meta"><s>${fmt(p.old)}</s></small></td><td>${p.stock}</td>
+      <td>${esc((CATS.find(c => c.id === p.cat) || {}).name || p.cat)}</td><td>${fmt(p.price)}${Number(p.old) > Number(p.price) ? `<br><small class="meta"><s>${fmt(p.old)}</s></small>` : ""}</td><td>${p.stock}</td>
       <td style="white-space:nowrap"><button class="mini" data-edit="${p.id}">Tahrirlash</button> <button class="mini del" data-del="${p.id}">O'chirish</button></td></tr>`).join("") + `</table></div>`;
   $("#newP").onclick = () => productForm();
   $("#view").onclick = async e => {
