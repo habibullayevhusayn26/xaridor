@@ -59,6 +59,12 @@ function openOverlay() {
   document.documentElement.classList.add("overlay-open");
 }
 
+function renderLoading() {
+  const grid = $("#grid");
+  grid.setAttribute("aria-busy", "true");
+  grid.innerHTML = Array.from({ length: 6 }, () => `<div class="card skeleton" aria-hidden="true"><div class="pic"></div><div class="info"><i></i><i></i><i></i><b></b></div></div>`).join("");
+}
+
 /* ---------- catalog UI ---------- */
 function renderStatic() {
   $("#chips").innerHTML = `<button class="chip" data-cat="">Hammasi</button>` +
@@ -85,7 +91,7 @@ function cardHTML(p) {
   const fav = state.favs.includes(p.id);
   return `<article class="card">
     <div class="pic" style="background:${p.color}" data-open="${p.id}">
-      ${hasDiscount(p) ? `<span class="badge">-${disc(p)}%</span>` : ""}${p.image ? `<img class="product-photo" src="${esc(p.image)}" alt="${esc(p.name)}">` : ic(p.icon, 84)}
+      ${hasDiscount(p) ? `<span class="badge">-${disc(p)}%</span>` : ""}${p.image ? `<img class="product-photo" src="${esc(p.image)}" alt="${esc(p.name)}" loading="lazy">` : ic(p.icon, 84)}
       <button class="heart ${fav ? "on" : ""}" data-fav="${p.id}" aria-label="Sevimlilarga qo'shish">${ic("heart", 18, fav)}</button>
     </div>
     <div class="info">
@@ -102,8 +108,11 @@ function renderGrid() {
   const list = filtered();
   const c = CATEGORIES.find(c => c.id === state.cat);
   $("#title").textContent = state.onlyFav ? "Sevimlilar" : state.q ? `«${state.q}» bo'yicha natijalar` : c ? c.name : "Barcha mahsulotlar";
+  const noProducts = !PRODUCTS.length;
+  const hasFilters = !!(state.cat || state.q || state.onlyFav || state.min || state.max);
+  $("#grid").setAttribute("aria-busy", "false");
   $("#grid").innerHTML = list.length ? list.map(cardHTML).join("") :
-    `<div class="empty"><b>Hech narsa topilmadi</b>${state.onlyFav ? "Yurakcha belgisini bosib mahsulotni saqlang." : "Filtrlarni o'zgartirib ko'ring."}</div>`;
+    `<div class="empty">${ic(noProducts ? "package" : "search", 38)}<b>${noProducts ? "Hozircha mahsulotlar yo'q" : state.onlyFav ? "Sevimlilar ro'yxati bo'sh" : "Hech narsa topilmadi"}</b><span>${noProducts ? "Mahsulotlar qo'shilganda shu yerda ko'rinadi." : state.onlyFav ? "Yoqtirgan mahsulotlaringizni yurakcha orqali saqlang." : "Qidiruv so'zini yoki filtrlarni o'zgartirib ko'ring."}</span>${hasFilters ? `<button class="btn line" data-clear-filters>Filtrlarni tozalash</button>` : ""}</div>`;
   document.querySelectorAll("#chips .chip").forEach(button => {
     button.classList.toggle("on", (button.dataset.cat || null) === state.cat && !state.onlyFav);
   });
@@ -148,7 +157,7 @@ function persist() {
 }
 
 /* ---------- cart ---------- */
-function addToCart(id, q = 1) { const p = byId(id); if (!p || p.stock <= 0) return toast("Mahsulot tugagan"); if ((state.cart[id] || 0) + q > p.stock) return toast("Omborda faqat " + p.stock + " dona bor"); state.cart[id] = (state.cart[id] || 0) + q; persist(); toast("Savatga qo'shildi"); if (!$("#cartDrawer").hidden) renderCart(); }
+function addToCart(id, q = 1, button = null) { const p = byId(id); if (!p || p.stock <= 0) return toast("Mahsulot tugagan"); if ((state.cart[id] || 0) + q > p.stock) return toast("Omborda faqat " + p.stock + " dona bor"); state.cart[id] = (state.cart[id] || 0) + q; persist(); toast("Savatga qo'shildi"); if (button) { button.classList.remove("added"); void button.offsetWidth; button.classList.add("added"); setTimeout(() => button.classList.remove("added"), 650); } if (!$("#cartDrawer").hidden) renderCart(); }
 function setQty(id, q) { if (q <= 0) delete state.cart[id]; else state.cart[id] = Math.min(q, 99, (byId(id) || { stock: 99 }).stock); persist(); renderCart(); }
 function toggleFav(id) {
   const i = state.favs.indexOf(id); i >= 0 ? state.favs.splice(i, 1) : state.favs.push(id);
@@ -544,7 +553,7 @@ document.addEventListener("click", e => {
   const accountAction = t.closest("#accountFavorites, #accountCart, #accountMessages, #myOrders, #logout, #messagesBtn");
   let el;
   if ((el = g("data-fav"))) { e.stopPropagation(); return toggleFav(+el.dataset.fav); }
-  if ((el = g("data-add"))) return addToCart(+el.dataset.add);
+  if ((el = g("data-add"))) return addToCart(+el.dataset.add, 1, el);
   if ((el = g("data-open"))) return openProduct(+el.dataset.open);
   if ((el = g("data-cat"))) return setCat(el.dataset.cat);
   if ((el = g("data-inc"))) return setQty(+el.dataset.inc, state.cart[el.dataset.inc] + 1);
@@ -572,6 +581,11 @@ document.addEventListener("click", e => {
   }
   if (t.id === "confirmLogout") { logout(); closeAll(); return toast("Chiqildi"); }
   if (t.id === "cancelLogout") return openAccount();
+  if (g("data-clear-filters")) {
+    state.cat = null; state.q = ""; state.onlyFav = false; state.min = 0; state.max = 0; state.sort = "pop";
+    $("#q").value = ""; $("#pmin").value = ""; $("#pmax").value = ""; $("#sort").value = "pop";
+    renderGrid(); return;
+  }
   if (!t.closest(".search")) $("#suggest").hidden = true;
 });
 $("#brand").onclick = e => { e.preventDefault(); setCat(null); };
@@ -585,7 +599,7 @@ $("#q").addEventListener("input", e => {
   const v = e.target.value.trim().toLowerCase(), s = $("#suggest");
   if (!v) { s.hidden = true; return; }
   const m = PRODUCTS.filter(p => p.name.toLowerCase().includes(v)).slice(0, 6);
-  s.innerHTML = m.length ? m.map(p => `<button data-open="${p.id}">${ic(p.icon, 20)}${esc(p.name)}</button>`).join("") : `<div style="padding:12px 14px;color:#5E6B75">Hech narsa topilmadi</div>`;
+  s.innerHTML = m.length ? m.map(p => `<button data-open="${p.id}">${p.image ? `<img class="search-thumb" src="${esc(p.image)}" alt="" loading="lazy">` : `<span class="search-icon">${ic(p.icon, 20)}</span>`}<span class="search-result"><b>${esc(p.name)}</b><small>${fmt(p.price)}</small></span></button>`).join("") : `<div class="search-empty">${ic("search", 18)} Hech narsa topilmadi</div>`;
   s.hidden = false;
 });
 $("#sort").onchange = e => { state.sort = e.target.value; renderGrid(); };
@@ -594,6 +608,7 @@ $("#pmax").oninput = e => { state.max = +e.target.value || 0; renderGrid(); };
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeAll(); });
 
 async function loadProducts() {
+  if (!PRODUCTS.length) renderLoading();
   try {
     PRODUCTS = await api("/products");
     for (const id of Object.keys(state.cart)) if (!byId(+id)) delete state.cart[id];

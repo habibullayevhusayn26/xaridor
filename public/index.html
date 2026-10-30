@@ -15,8 +15,8 @@
 <header class="head">
   <div class="wrap bar">
     <a class="brand" href="#" id="brand"><img src="logo.svg" alt="" width="40" height="40"><span>Xaridor</span></a>
-    <div class="search">
-      <input id="q" type="search" placeholder="Mahsulot qidirish" autocomplete="off" aria-label="Qidiruv">
+    <div class="search" role="search">
+      <input id="q" type="search" placeholder="Mahsulot nomi yoki turini qidiring" autocomplete="off" aria-label="Qidiruv" aria-controls="suggest" aria-autocomplete="list">
       <button id="qBtn" aria-label="Qidirish"><span data-ic="search" data-size="20"></span></button>
       <div class="suggest" id="suggest" hidden></div>
     </div>
@@ -48,7 +48,7 @@
         </select>
       </div>
     </div>
-    <div class="grid" id="grid"></div>
+    <div class="grid" id="grid" aria-live="polite" aria-busy="false"></div>
   </section>
 </main>
 
