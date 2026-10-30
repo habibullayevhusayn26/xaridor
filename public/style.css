@@ -40,6 +40,7 @@ html.overlay-open{overflow:hidden}
 .act small{font-size:12px;color:var(--mute)}
 .act:hover{background:var(--bg)}
 .act i{position:absolute;top:0;right:6px;min-width:19px;height:19px;border-radius:10px;background:var(--coral);color:#fff;font:600 11px/19px Onest,sans-serif;text-align:center;padding:0 5px}
+.act#messagesBtn i{top:-2px;right:1px;z-index:1}
 .chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:10px;scrollbar-width:none}
 .chip{white-space:nowrap;padding:7px 14px;border-radius:20px;background:var(--bg);font-size:14px;font-weight:500}
 .chip:hover{background:#e1eaec}
@@ -133,6 +134,10 @@ html.overlay-open{overflow:hidden}
 .message-unread{border-left:4px solid var(--teal)}
 .status{display:inline-block;background:#DFF3E7;color:#146c3a;font-size:12px;font-weight:600;padding:2px 9px;border-radius:8px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 20px;border-radius:12px;z-index:90}
+.toast.notification{left:auto;right:24px;bottom:24px;transform:none;width:min(360px,calc(100vw - 32px));padding:38px 18px 18px 50px;border:1px solid rgba(255,255,255,.14);border-radius:16px;background:#fff;color:var(--ink);box-shadow:0 12px 36px rgba(10,25,30,.24);animation:notification-in .24s ease-out}
+.toast.notification::before{content:"✉";position:absolute;left:16px;top:17px;width:24px;height:24px;display:grid;place-items:center;border-radius:50%;background:#e4f3f1;color:var(--teal);font-size:14px}
+.toast.notification::after{content:"Yangi xabar";position:absolute;top:16px;left:50px;color:var(--teal);font-size:12px;font-weight:700}
+@keyframes notification-in{from{transform:translate(24px,12px);opacity:0}to{transform:translate(0);opacity:1}}
 
 @media(max-width:860px){
   .bar{flex-wrap:wrap}.search{order:5;flex-basis:100%}
@@ -148,6 +153,7 @@ html.overlay-open{overflow:hidden}
 @media(max-width:520px){
   .grid{grid-template-columns:repeat(2,1fr);gap:10px}.pic{height:150px;font-size:64px}.filters input{width:48%}
   .dots{bottom:4px;gap:4px}.dots button{width:6px;height:6px}.dots button.on{width:16px}
+  .toast.notification{right:12px;bottom:12px;width:min(360px,calc(100vw - 24px))}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 

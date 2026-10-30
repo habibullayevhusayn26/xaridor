@@ -32,8 +32,11 @@ const disc = p => Math.round((1 - p.price / p.old) * 100);
 
 /* ---------- toast / overlay ---------- */
 let tt;
-function toast(msg, duration = 2200) {
-  const t = $("#toast"); t.textContent = msg; t.hidden = false;
+function toast(msg, duration = 2200, notification = false) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.toggle("notification", notification);
+  t.hidden = false;
   clearTimeout(tt); tt = setTimeout(() => (t.hidden = true), duration);
 }
 function closeAll() {
@@ -103,7 +106,11 @@ function updateBadges() {
   const cc = $("#cartCount"), fc = $("#favCount"), mc = $("#messageCount");
   cc.textContent = n; cc.hidden = !n;
   fc.textContent = state.favs.length; fc.hidden = !state.favs.length;
-  mc.textContent = state.unreadMessages; mc.hidden = !state.user || !state.unreadMessages;
+  mc.textContent = state.unreadMessages > 99 ? "99+" : state.unreadMessages;
+  mc.hidden = !state.user || !state.unreadMessages;
+  $("#messagesBtn").setAttribute("aria-label", state.unreadMessages
+    ? `Xabarlar, ${state.unreadMessages} ta o'qilmagan`
+    : "Xabarlar");
   $("#accLabel").textContent = state.user ? state.user.name.split(" ")[0] : "Kirish";
 }
 
@@ -115,7 +122,7 @@ async function refreshMessages(notify = false) {
     state.unreadMessages = result.unreadCount;
     updateBadges();
     if (notify && result.unreadCount > previousUnread) {
-      toast(`Sizda ${result.unreadCount} ta yangi xabar bor`, 6000);
+      toast(`Sizda ${result.unreadCount} ta o'qilmagan xabar bor`, 6000, true);
     }
   } catch (err) {
     if (err.status === 401 || err.status === 403) logout();
