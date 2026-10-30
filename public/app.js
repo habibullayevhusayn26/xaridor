@@ -370,12 +370,12 @@ function openAccount(mode = "login") {
   if (state.user) {
     $("#accountBody").innerHTML = `<h2>${esc(state.user.name)}</h2><p class="meta" style="margin-bottom:16px">ID: ${esc(state.user.id || "—")}<br>${esc(state.user.phone)}</p>
       <nav class="account-menu" aria-label="Profil menyusi">
-        <button class="account-menu-item" id="accountFavorites">${ic("heart", 21)}<span>Sevimlilar</span></button>
-        <button class="account-menu-item" id="accountCart">${ic("cart", 21)}<span>Savat</span></button>
-        <button class="account-menu-item" id="accountMessages">${ic("mail", 21)}<span>Xabarlar</span>${state.unreadMessages ? `<i>${state.unreadMessages > 99 ? "99+" : state.unreadMessages}</i>` : ""}</button>
-        <button class="account-menu-item" id="myOrders">${ic("package", 21)}<span>Buyurtmalarim</span></button>
-        ${state.user.role === "admin" ? `<a class="account-menu-item" href="/admin.html">${ic("user", 21)}<span>Admin panel</span></a>` : ""}
-        <button class="account-menu-item" id="logout">${ic("x", 21)}<span>Chiqish</span></button>
+      <button class="account-menu-item" id="accountFavorites"><span class="account-menu-icon">${ic("heart", 21)}</span><span class="account-menu-label">Sevimlilar</span></button>
+      <button class="account-menu-item" id="accountCart"><span class="account-menu-icon">${ic("cart", 21)}</span><span class="account-menu-label">Savat</span></button>
+      <button class="account-menu-item" id="accountMessages"><span class="account-menu-icon">${ic("mail", 21)}</span><span class="account-menu-label">Xabarlar</span>${state.unreadMessages ? `<i>${state.unreadMessages > 99 ? "99+" : state.unreadMessages}</i>` : ""}</button>
+      <button class="account-menu-item" id="myOrders"><span class="account-menu-icon">${ic("package", 21)}</span><span class="account-menu-label">Buyurtmalarim</span></button>
+      ${state.user.role === "admin" ? `<a class="account-menu-item" href="/admin.html"><span class="account-menu-icon">${ic("user", 21)}</span><span class="account-menu-label">Admin panel</span></a>` : ""}
+      <button class="account-menu-item" id="logout"><span class="account-menu-icon">${ic("x", 21)}</span><span class="account-menu-label">Chiqish</span></button>
       </nav>`;
     return;
   }
@@ -436,6 +436,7 @@ function doSearch(q) { state.q = q.trim(); state.cat = null; state.onlyFav = fal
 /* ---------- events ---------- */
 document.addEventListener("click", e => {
   const t = e.target, g = a => t.closest(`[${a}]`);
+  const accountAction = t.closest("#accountFavorites, #accountCart, #accountMessages, #myOrders, #logout, #messagesBtn");
   let el;
   if ((el = g("data-fav"))) { e.stopPropagation(); return toggleFav(+el.dataset.fav); }
   if ((el = g("data-add"))) return addToCart(+el.dataset.add);
@@ -449,17 +450,17 @@ document.addEventListener("click", e => {
   if (g("data-close") || t.id === "overlay" || t.id === "modal") return closeAll();
   if (t.id === "promoBtn") return applyPromo();
   if (t.id === "checkoutBtn") return openCheckout();
-  if (t.id === "seeOrders" || t.id === "myOrders") return openOrders();
-  if (t.id === "messagesBtn" || t.id === "accountMessages") return openMessages();
-  if (t.id === "accountFavorites") {
+  if (t.id === "seeOrders" || accountAction?.id === "myOrders") return openOrders();
+  if (accountAction?.id === "messagesBtn" || accountAction?.id === "accountMessages") return openMessages();
+  if (accountAction?.id === "accountFavorites") {
     state.onlyFav = true; state.cat = null; state.q = ""; $("#q").value = "";
     $("#catMenu").hidden = true; closeAll(); renderGrid(); scrollTo({ top: 0, behavior: "smooth" }); return;
   }
-  if (t.id === "accountCart") {
+  if (accountAction?.id === "accountCart") {
     $("#accountDrawer").hidden = true;
     return openCart();
   }
-  if (t.id === "logout") {
+  if (accountAction?.id === "logout") {
     $("#accountBody").innerHTML = `<p style="margin-bottom:14px">Hisobdan chiqishni tasdiqlaysizmi?</p>
       <div class="form"><button class="btn sun block" id="confirmLogout">Ha</button><button class="btn line block" id="cancelLogout">Yo'q</button></div>`;
     return;
