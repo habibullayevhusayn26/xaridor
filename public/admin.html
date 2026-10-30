@@ -11,7 +11,7 @@
 .a-top{background:#fff;border-bottom:1px solid var(--line)}
 .a-top .wrap{display:flex;align-items:center;gap:14px;padding-top:12px;padding-bottom:12px;flex-wrap:wrap}
 .a-top .sp{flex:1}
-.a-tabs{display:flex;gap:6px;margin:18px 0}
+.a-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:18px 0}
 .a-tabs button{padding:10px 18px;border-radius:10px;background:#fff;font-weight:600}
 .a-tabs button.on{background:var(--teal);color:#fff}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
@@ -45,7 +45,7 @@ const fmt = n => new Intl.NumberFormat("uz-UZ").format(Math.round(n)).replace(/,
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const CATS = [];
 const STATUSES = ["Qabul qilindi", "Yig'ilmoqda", "Yo'lda", "Yetkazildi", "Bekor qilindi"];
-let tab = "stats", cache = {};
+let tab = "stats", cache = {}, selectedMessageUser = null, messageSearchResults = [], messageSearchQuery = "";
 
 const tok = () => { try { return localStorage.getItem("bz_admin_token"); } catch { return null; } };
 async function api(url, opts = {}) {
@@ -99,7 +99,7 @@ function shell(me) {
     <span class="sp"></span><button class="mini" id="tgTest">Telegramni tekshirish</button><a href="/" class="mini" style="text-decoration:none">Saytga o'tish</a><button class="mini" id="out">Chiqish (${esc(me.name)})</button></div></div>
     <div class="wrap"><div class="a-tabs" id="tabs">
       <button data-t="stats">Statistika</button><button data-t="orders">Buyurtmalar</button><button data-t="products">Mahsulotlar</button>
-      <button data-t="slides">Slaydlar</button><button data-t="promos">Promokodlar</button></div>
+      <button data-t="slides">Slaydlar</button><button data-t="promos">Promokodlar</button><button data-t="messages">Xabar yuborish</button></div>
       <div id="view"></div></div>`;
   $("#tgTest").onclick = async () => { try { await api("/admin/telegram-test", { method: "POST" }); toast("Telegramga sinov xabari yuborildi"); } catch (e) { toast("Telegram xatosi: " + e.message); } };
   $("#out").onclick = () => { localStorage.removeItem("bz_admin_token"); loginView(); };
@@ -110,7 +110,7 @@ function shell(me) {
 async function render() {
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
   $("#view").innerHTML = `<p class="meta">Yuklanmoqda...</p>`;
-  try { await ({ stats: viewStats, orders: viewOrders, products: viewProducts, slides: viewSlides, promos: viewPromos })[tab](); }
+  try { await ({ stats: viewStats, orders: viewOrders, products: viewProducts, slides: viewSlides, promos: viewPromos, messages: viewMessages })[tab](); }
   catch (e) { if (e.status === 401 || e.status === 403) { localStorage.removeItem("bz_admin_token"); loginView("Qayta kiring."); } else toast(e.message); }
 }
 
@@ -216,6 +216,65 @@ async function viewPromos() {
     if (del && confirm(`${del.dataset.promoDel} promokodi o'chirilsinmi?`)) {
       try { await api("/admin/promos/" + encodeURIComponent(del.dataset.promoDel), { method: "DELETE" }); toast("Promokod o'chirildi"); render(); }
       catch (err) { toast(err.message); }
+    }
+  };
+}
+
+function viewMessages() {
+  $("#view").innerHTML = `<div class="panel">
+    <h2>Foydalanuvchiga xabar yuborish</h2>
+    <form class="form" id="messageSearch" style="grid-template-columns:1fr auto;align-items:end">
+      <label>Foydalanuvchini ism, telefon yoki ID bo'yicha qidiring<input name="q" minlength="2" required value="${esc(messageSearchQuery)}"></label>
+      <button class="btn dark" type="submit">Qidirish</button>
+    </form>
+    <div id="messageUsers">${messageSearchResults.length ? messageSearchResults.map(user =>
+      `<div class="row" style="align-items:center;padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(user.name)}</b><br><small class="meta">${esc(user.phone)} · ID ${esc(user.id)}</small></span><button class="mini" data-message-user="${esc(user.id)}">Tanlash</button></div>`
+    ).join("") : messageSearchQuery ? `<p class="meta">Foydalanuvchi topilmadi.</p>` : ""}</div>
+    ${selectedMessageUser ? `<hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+      <p style="margin-bottom:12px">Tanlangan: <b>${esc(selectedMessageUser.name)}</b> (${esc(selectedMessageUser.phone)})</p>
+      <form class="form" id="sendMessageForm">
+        <label>Sarlavha<input name="title" maxlength="100" required></label>
+        <label>Xabar<textarea name="body" rows="5" maxlength="2000" required></textarea></label>
+        <div class="err" id="messageError"></div><button class="btn sun block" type="submit">Xabar yuborish</button>
+      </form>` : ""}</div>`;
+  $("#messageSearch").onsubmit = async e => {
+    e.preventDefault();
+    const form = e.target, button = form.querySelector('button[type="submit"]');
+    messageSearchQuery = new FormData(form).get("q").trim();
+    selectedMessageUser = null;
+    button.disabled = true;
+    try {
+      messageSearchResults = await api("/admin/users?q=" + encodeURIComponent(messageSearchQuery));
+      viewMessages();
+    } catch (err) {
+      toast(err.message); button.disabled = false;
+    }
+  };
+  $("#view").onclick = e => {
+    const button = e.target.closest("[data-message-user]");
+    if (!button) return;
+    selectedMessageUser = messageSearchResults.find(user => user.id === button.dataset.messageUser) || null;
+    viewMessages();
+  };
+  if ($("#sendMessageForm")) $("#sendMessageForm").onsubmit = async e => {
+    e.preventDefault();
+    const form = e.target;
+    if (form.dataset.submitting) return;
+    form.dataset.submitting = "true";
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    try {
+      await api("/admin/messages", {
+        method: "POST",
+        body: { userCode: selectedMessageUser.id, ...Object.fromEntries(new FormData(form)) }
+      });
+      selectedMessageUser = null;
+      toast("Xabar yuborildi");
+      viewMessages();
+    } catch (err) {
+      $("#messageError").textContent = err.message;
+      delete form.dataset.submitting;
+      button.disabled = false;
     }
   };
 }

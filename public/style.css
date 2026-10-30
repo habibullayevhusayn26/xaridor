@@ -130,6 +130,7 @@ html.overlay-open{overflow:hidden}
 .tabs button{flex:1;padding:10px;border-radius:10px;background:var(--bg);font-weight:600}
 .tabs button.on{background:var(--teal);color:#fff}
 .order{border:1.5px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.message-unread{border-left:4px solid var(--teal)}
 .status{display:inline-block;background:#DFF3E7;color:#146c3a;font-size:12px;font-weight:600;padding:2px 9px;border-radius:8px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 20px;border-radius:12px;z-index:90}
 
@@ -155,6 +156,7 @@ html.overlay-open{overflow:hidden}
 .ic{display:block;flex:none}
 .search>button{display:grid;place-items:center}
 .act span{display:grid;place-items:center;height:24px}
+.act .message-icon{font-size:21px;line-height:24px}
 .x{display:grid;place-items:center}
 .cat-menu button{align-items:center}
 .cat-menu button .ic{color:var(--teal)}

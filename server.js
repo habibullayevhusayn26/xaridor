@@ -79,7 +79,7 @@ const normPhone = s => {
 const fmtSum = n => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " so'm";
 const ah = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-let db, users, products, orders, counters, slides, promos, promoUses;
+let db, users, products, orders, counters, slides, promos, promoUses, messages;
 
 const promoOut = p => ({
   code: p.code, type: p.type, value: p.value, active: !!p.active,
@@ -405,11 +405,33 @@ async function changeOrderStatus(id, status) {
   if (!order) return { error: "Buyurtma topilmadi.", statusCode: 404 };
   if (order.status === "Bekor qilindi" && status !== order.status)
     return { error: "Bekor qilingan buyurtmani qayta ochib bo'lmaydi.", statusCode: 400 };
-  if (status === "Bekor qilindi" && order.status !== status)
+  if (order.status === status) return { order };
+  const notification = order.userId ? {
+    _id: new ObjectId(), userId: order.userId, type: "order",
+    title: "Buyurtma holati yangilandi",
+    body: `${order._id} raqamli buyurtmangiz holati: ${status}.`,
+    orderId: order._id, readAt: null, created: new Date()
+  } : null;
+  if (notification) await messages.insertOne(notification);
+  let updated;
+  try {
+    updated = await orders.findOneAndUpdate(
+      { _id: order._id, status: order.status },
+      { $set: { status } },
+      { returnDocument: "after" }
+    );
+  } catch (error) {
+    if (notification) await messages.deleteOne({ _id: notification._id });
+    throw error;
+  }
+  if (!updated) {
+    if (notification) await messages.deleteOne({ _id: notification._id });
+    return { error: "Buyurtma holati boshqa joyda o'zgartirildi. Qayta yuklang.", statusCode: 409 };
+  }
+  if (status === "Bekor qilindi")
     for (const item of order.items)
       await products.updateOne({ _id: item.id }, { $inc: { stock: item.q, sold: -item.q } });
-  await orders.updateOne({ _id: order._id }, { $set: { status } });
-  return { order: await orders.findOne({ _id: order._id }) };
+  return { order: updated };
 }
 
 async function handleTelegramCallback(callback) {
@@ -891,6 +913,31 @@ app.post("/api/orders", orderLimiter, auth(), ah(async (req, res) => {
 app.get("/api/orders/my", auth(), ah(async (req, res) =>
   res.json((await orders.find({ userId: req.user._id }).sort({ created: -1 }).toArray()).map(orderOut))));
 
+app.get("/api/messages", auth(), ah(async (req, res) => {
+  const [list, unreadCount] = await Promise.all([
+    messages.find({ userId: req.user._id }).sort({ created: -1 }).limit(100).toArray(),
+    messages.countDocuments({ userId: req.user._id, readAt: null })
+  ]);
+  res.json({
+    unreadCount,
+    messages: list.map(m => ({
+      id: String(m._id), type: m.type, title: m.title, body: m.body,
+      orderId: m.orderId || null, read: !!m.readAt, created: m.created
+    }))
+  });
+}));
+
+app.post("/api/messages/read", auth(), ah(async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+  if (ids.length > 100 || ids.some(id => typeof id !== "string" || !ObjectId.isValid(id)))
+    return res.status(400).json({ error: "Xabarlar ro'yxati noto'g'ri." });
+  await messages.updateMany(
+    { _id: { $in: ids.map(id => new ObjectId(id)) }, userId: req.user._id, readAt: null },
+    { $set: { readAt: new Date() } }
+  );
+  res.json({ ok: true, unreadCount: await messages.countDocuments({ userId: req.user._id, readAt: null }) });
+}));
+
 // ---- Admin ----
 const admin = express.Router();
 admin.use(auth(), adminOnly);
@@ -915,6 +962,33 @@ admin.get("/stats", ah(async (req, res) => {
 admin.post("/telegram-test", ah(async (req, res) => {
   try { await tgCall("sendMessage", { chat_id: TG_CHAT, text: "Xaridor: Telegram ulanishi ishlayapti." }); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
+}));
+
+admin.get("/users", ah(async (req, res) => {
+  const query = String(req.query.q || "").trim();
+  if (query.length < 2) return res.json([]);
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(escaped, "i");
+  const list = await users.find({
+    role: "user",
+    $or: [{ name: regex }, { phone: regex }, { userCode: regex }]
+  }, { projection: { userCode: 1, name: 1, phone: 1 } }).sort({ name: 1 }).limit(20).toArray();
+  res.json(list.map(user => ({ id: user.userCode, name: user.name, phone: user.phone })));
+}));
+
+admin.post("/messages", ah(async (req, res) => {
+  const userCode = String(req.body.userCode || "").trim().toUpperCase();
+  const title = String(req.body.title || "").trim().slice(0, 100);
+  const body = String(req.body.body || "").trim().slice(0, 2000);
+  if (!USER_CODE_PATTERN.test(userCode)) return res.status(400).json({ error: "Foydalanuvchini tanlang." });
+  if (title.length < 2) return res.status(400).json({ error: "Xabar sarlavhasini kiriting." });
+  if (body.length < 2) return res.status(400).json({ error: "Xabar matnini kiriting." });
+  const user = await users.findOne({ userCode, role: "user" }, { projection: { _id: 1 } });
+  if (!user) return res.status(404).json({ error: "Foydalanuvchi topilmadi." });
+  await messages.insertOne({
+    userId: user._id, type: "admin", title, body, readAt: null, created: new Date()
+  });
+  res.json({ ok: true });
 }));
 
 admin.get("/slides", ah(async (req, res) =>
@@ -1109,6 +1183,7 @@ async function main() {
   users = db.collection("users"); products = db.collection("products");
   orders = db.collection("orders"); counters = db.collection("counters");
   slides = db.collection("slides"); promos = db.collection("promos"); promoUses = db.collection("promoUses");
+  messages = db.collection("messages");
   await users.createIndex({ phone: 1 }, { unique: true });
   await migrateUserCodes();
   await orders.createIndex({ userId: 1, created: -1 });
@@ -1117,6 +1192,8 @@ async function main() {
   await slides.createIndex({ created: 1 });
   await promos.createIndex({ code: 1 }, { unique: true });
   await promoUses.createIndex({ code: 1, uses: -1 });
+  await messages.createIndex({ userId: 1, created: -1 });
+  await messages.createIndex({ userId: 1, readAt: 1 });
 
   const slideSeed = await counters.updateOne(
     { _id: "slide-seed-v1" }, { $setOnInsert: { created: new Date() } }, { upsert: true }

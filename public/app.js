@@ -19,22 +19,22 @@ async function api(url, opts = {}) {
   if (!r.ok) { const e = new Error(data.error || "Xatolik yuz berdi."); e.status = r.status; throw e; }
   return data;
 }
-function logout() { state.user = null; store.set("user", null); store.set("token", null); updateBadges(); }
+function logout() { state.user = null; state.unreadMessages = 0; store.set("user", null); store.set("token", null); updateBadges(); }
 
 const FREE_SHIP = 200000, SHIP = 15000;
 const state = {
   cart: store.get("cart", {}), favs: store.get("favs", []),
   user: store.get("user", null), promo: store.get("promo", ""), promoInfo: null,
-  cat: null, q: "", onlyFav: false, min: 0, max: 0, sort: "pop"
+  unreadMessages: 0, cat: null, q: "", onlyFav: false, min: 0, max: 0, sort: "pop"
 };
 const byId = id => PRODUCTS.find(p => p.id === id);
 const disc = p => Math.round((1 - p.price / p.old) * 100);
 
 /* ---------- toast / overlay ---------- */
 let tt;
-function toast(msg) {
+function toast(msg, duration = 2200) {
   const t = $("#toast"); t.textContent = msg; t.hidden = false;
-  clearTimeout(tt); tt = setTimeout(() => (t.hidden = true), 2200);
+  clearTimeout(tt); tt = setTimeout(() => (t.hidden = true), duration);
 }
 function closeAll() {
   $("#cartDrawer").hidden = true; $("#accountDrawer").hidden = true; $("#modal").hidden = true; $("#overlay").hidden = true;
@@ -100,10 +100,27 @@ function renderGrid() {
 
 function updateBadges() {
   const n = Object.values(state.cart).reduce((a, b) => a + b, 0);
-  const cc = $("#cartCount"), fc = $("#favCount");
+  const cc = $("#cartCount"), fc = $("#favCount"), mc = $("#messageCount");
   cc.textContent = n; cc.hidden = !n;
   fc.textContent = state.favs.length; fc.hidden = !state.favs.length;
+  mc.textContent = state.unreadMessages; mc.hidden = !state.user || !state.unreadMessages;
   $("#accLabel").textContent = state.user ? state.user.name.split(" ")[0] : "Kirish";
+}
+
+async function refreshMessages(notify = false) {
+  if (!state.user || state.user.mustChangePassword) return;
+  try {
+    const previousUnread = state.unreadMessages;
+    const result = await api("/messages");
+    state.unreadMessages = result.unreadCount;
+    updateBadges();
+    if (notify && result.unreadCount > previousUnread) {
+      toast(`Sizda ${result.unreadCount} ta yangi xabar bor`, 6000);
+    }
+  } catch (err) {
+    if (err.status === 401 || err.status === 403) logout();
+    else toast("Xabarlarni yuklab bo'lmadi: " + err.message);
+  }
 }
 
 function persist() {
@@ -235,6 +252,29 @@ async function openOrders() {
     : `<div class="empty"><b>Buyurtmalar yo'q</b>Birinchi buyurtmangizni bering — XARID10 promokodi bilan 10% chegirma.</div>`);
 }
 
+async function openMessages() {
+  if (!state.user) return openAccount();
+  showModal(`<h2>Xabarlar</h2><p class="meta">Yuklanmoqda...</p>`);
+  try {
+    const result = await api("/messages");
+    $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button><h2>Xabarlar</h2>` +
+      (result.messages.length ? result.messages.map(message => `
+        <article class="order ${message.read ? "" : "message-unread"}">
+          <div class="row"><b>${esc(message.title)}</b><small class="meta">${new Date(message.created).toLocaleString("uz-UZ")}</small></div>
+          <p>${esc(message.body)}</p>
+        </article>`).join("") : `<div class="empty"><b>Xabarlar yo'q</b>Saytdan kelgan xabarlar shu yerda ko'rinadi.</div>`);
+    if (result.messages.some(message => !message.read)) {
+      const readResult = await api("/messages/read", {
+        method: "POST", body: { ids: result.messages.filter(message => !message.read).map(message => message.id) }
+      });
+      state.unreadMessages = readResult.unreadCount;
+      updateBadges();
+    }
+  } catch (err) {
+    $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button><h2>Xabarlar</h2><p class="err">${esc(err.message)}</p>`;
+  }
+}
+
 function requirePasswordChange() {
   $("#accountDrawer").hidden = true;
   $("#modalBox").innerHTML = `<h2>Yangi parol o'rnating</h2>
@@ -265,6 +305,7 @@ function requirePasswordChange() {
       updateBadges();
       closeAll();
       toast("Parol yangilandi.");
+      refreshMessages(true);
     } catch (err) {
       $("#requiredPasswordError").textContent = err.message;
       button.disabled = false;
@@ -304,6 +345,7 @@ function openAccount(mode = "login") {
         return requirePasswordChange();
       }
       updateBadges(); closeAll(); toast("Xush kelibsiz, " + r.user.name.split(" ")[0] + "!");
+      refreshMessages(true);
     } catch (err) { $("#authErr").textContent = err.message; btn.disabled = false; }
   });
 }
@@ -352,6 +394,7 @@ document.addEventListener("click", e => {
   if (t.id === "promoBtn") return applyPromo();
   if (t.id === "checkoutBtn") return openCheckout();
   if (t.id === "seeOrders" || t.id === "myOrders") return openOrders();
+  if (t.id === "messagesBtn") return openMessages();
   if (t.id === "logout") {
     $("#accountBody").innerHTML = `<p style="margin-bottom:14px">Hisobdan chiqishni tasdiqlaysizmi?</p>
       <div class="form"><button class="btn sun block" id="confirmLogout">Ha</button><button class="btn line block" id="cancelLogout">Yo'q</button></div>`;
@@ -366,6 +409,7 @@ $("#catBtn").onclick = e => { e.stopPropagation(); $("#catMenu").hidden = !$("#c
 $("#brand").onclick = e => { e.preventDefault(); setCat(null); };
 $("#cartBtn").onclick = openCart;
 $("#accBtn").onclick = () => openAccount();
+$("#messagesBtn").onclick = openMessages;
 $("#favBtn").onclick = () => { state.onlyFav = true; state.cat = null; state.q = ""; renderGrid(); scrollTo({ top: 0, behavior: "smooth" }); };
 $("#qBtn").onclick = () => doSearch($("#q").value);
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") doSearch(e.target.value); });
@@ -405,9 +449,11 @@ async function boot() {
       state.user = await api("/me");
       store.set("user", state.user);
       if (state.user.mustChangePassword) requirePasswordChange();
+      else await refreshMessages(true);
     } catch (e) { if (e.status === 401 || e.status === 403) logout(); }
     updateBadges();
   }
   await loadProducts();
+  setInterval(() => refreshMessages(true), 60000);
 }
 boot();
