@@ -250,7 +250,7 @@ function openProduct(id, keep) {
     <section class="product-reviews" id="productReviews" data-product-id="${p.id}">
       <h2>Mijozlar sharhlari</h2><p class="meta">Sharhlar yuklanmoqda...</p>
     </section>
-    ${rel.length ? `<h2 style="margin-top:22px">O'xshash mahsulotlar</h2><div class="grid" style="margin:0;grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">${rel.map(cardHTML).join("")}</div>` : ""}`);
+    ${rel.length ? `<h2 style="margin-top:22px">O'xshash mahsulotlar</h2><div class="grid related-grid">${rel.map(cardHTML).join("")}</div>` : ""}`);
   loadProductReviews(p.id);
 }
 
