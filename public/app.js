@@ -349,7 +349,14 @@ function openAccount(mode = "login") {
   openOverlay();
   if (state.user) {
     $("#accountBody").innerHTML = `<h2>${esc(state.user.name)}</h2><p class="meta" style="margin-bottom:16px">ID: ${esc(state.user.id || "—")}<br>${esc(state.user.phone)}</p>
-      <div class="form"><button class="btn dark block" id="myOrders">Buyurtmalarim</button><button class="btn line block" id="accountMessages">Xabarlar${state.unreadMessages ? ` (${state.unreadMessages})` : ""}</button>${state.user.role === "admin" ? `<a class="btn sun block" style="text-align:center;text-decoration:none" href="/admin.html">Admin panel</a>` : ""}<button class="btn line block" id="logout">Chiqish</button></div>`;
+      <nav class="account-menu" aria-label="Profil menyusi">
+        <button class="account-menu-item" id="accountFavorites">${ic("heart", 21)}<span>Sevimlilar</span></button>
+        <button class="account-menu-item" id="accountCart">${ic("cart", 21)}<span>Savat</span></button>
+        <button class="account-menu-item" id="accountMessages">${ic("mail", 21)}<span>Xabarlar</span>${state.unreadMessages ? `<i>${state.unreadMessages > 99 ? "99+" : state.unreadMessages}</i>` : ""}</button>
+        <button class="account-menu-item" id="myOrders">${ic("package", 21)}<span>Buyurtmalarim</span></button>
+        ${state.user.role === "admin" ? `<a class="account-menu-item" href="/admin.html">${ic("user", 21)}<span>Admin panel</span></a>` : ""}
+        <button class="account-menu-item" id="logout">${ic("x", 21)}<span>Chiqish</span></button>
+      </nav>`;
     return;
   }
   const reg = mode === "reg";
@@ -424,6 +431,14 @@ document.addEventListener("click", e => {
   if (t.id === "checkoutBtn") return openCheckout();
   if (t.id === "seeOrders" || t.id === "myOrders") return openOrders();
   if (t.id === "messagesBtn" || t.id === "accountMessages") return openMessages();
+  if (t.id === "accountFavorites") {
+    state.onlyFav = true; state.cat = null; state.q = ""; $("#q").value = "";
+    $("#catMenu").hidden = true; closeAll(); renderGrid(); scrollTo({ top: 0, behavior: "smooth" }); return;
+  }
+  if (t.id === "accountCart") {
+    $("#accountDrawer").hidden = true;
+    return openCart();
+  }
   if (t.id === "logout") {
     $("#accountBody").innerHTML = `<p style="margin-bottom:14px">Hisobdan chiqishni tasdiqlaysizmi?</p>
       <div class="form"><button class="btn sun block" id="confirmLogout">Ha</button><button class="btn line block" id="cancelLogout">Yo'q</button></div>`;
