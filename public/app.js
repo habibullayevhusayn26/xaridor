@@ -22,6 +22,7 @@ async function api(url, opts = {}) {
 function logout() { state.user = null; state.unreadMessages = 0; store.set("user", null); store.set("token", null); updateBadges(); }
 
 const FREE_SHIP = 200000, SHIP = 15000;
+const ORDER_STATUSES = ["Qabul qilindi", "Yig'ilmoqda", "Yo'lda", "Yetkazildi"];
 const state = {
   cart: store.get("cart", {}), favs: store.get("favs", []),
   user: store.get("user", null), promo: store.get("promo", ""), promoInfo: null,
@@ -154,6 +155,31 @@ function toggleFav(id) {
   const i = state.favs.indexOf(id); i >= 0 ? state.favs.splice(i, 1) : state.favs.push(id);
   persist(); renderGrid(); if (!$("#modal").hidden && $("#modalBox .pd")) openProduct(id, true);
 }
+function orderTracker(status) {
+  if (status === "Bekor qilindi") return `<p class="order-cancelled">Buyurtma bekor qilindi</p>`;
+  const active = ORDER_STATUSES.indexOf(status);
+  return `<ol class="order-tracker">${ORDER_STATUSES.map((step, index) =>
+    `<li class="${index <= active ? "complete" : ""}"><span>${index < active ? "✓" : index + 1}</span><small>${step}</small></li>`
+  ).join("")}</ol>`;
+}
+function reorderOrder(order) {
+  let added = 0, unavailable = 0;
+  for (const item of order.items) {
+    const product = byId(Number(item.id));
+    if (!product || !product.active || product.stock <= 0) { unavailable++; continue; }
+    const current = state.cart[product.id] || 0;
+    const quantity = Math.min(item.q, product.stock - current, 99 - current);
+    if (quantity <= 0) { unavailable++; continue; }
+    state.cart[product.id] = current + quantity;
+    added += quantity;
+    if (quantity < item.q) unavailable++;
+  }
+  if (!added) return toast("Oldingi buyurtmadagi mahsulotlar hozir mavjud emas.");
+  persist();
+  closeAll();
+  openCart();
+  toast(unavailable ? `${added} dona savatga qo'shildi. Ayrim mahsulotlar mavjud emas.` : "Oldingi buyurtma savatga qo'shildi.");
+}
 function totals() {
   const sub = Object.entries(state.cart).reduce((s, [id, q]) => s + (byId(+id) ? byId(+id).price * q : 0), 0);
   const promo = state.promoInfo?.code === state.promo ? state.promoInfo : null;
@@ -221,7 +247,62 @@ function openProduct(id, keep) {
       <button class="btn sun block" data-add="${p.id}" ${p.stock <= 0 ? "disabled" : ""}>${p.stock <= 0 ? "Omborda yo'q" : "Savatga qo'shish"}</button>
       <button class="btn line block" data-fav="${p.id}">${ic("heart", 18, fav)} ${fav ? "Sevimlilardan olib tashlash" : "Sevimlilarga qo'shish"}</button>
     </div></div>
+    <section class="product-reviews" id="productReviews" data-product-id="${p.id}">
+      <h2>Mijozlar sharhlari</h2><p class="meta">Sharhlar yuklanmoqda...</p>
+    </section>
     ${rel.length ? `<h2 style="margin-top:22px">O'xshash mahsulotlar</h2><div class="grid" style="margin:0;grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">${rel.map(cardHTML).join("")}</div>` : ""}`);
+  loadProductReviews(p.id);
+}
+
+async function loadProductReviews(productId) {
+  const section = $("#productReviews");
+  if (!section || Number(section.dataset.productId) !== productId) return;
+  try {
+    const data = await api(`/products/${productId}/reviews`);
+    const current = $("#productReviews");
+    if (!current || Number(current.dataset.productId) !== productId) return;
+    const reviewsHTML = data.reviews.length
+      ? data.reviews.map(review => `<article class="review">
+          <div class="row"><b>${esc(review.name)}</b><span class="review-stars" aria-label="${review.rating} yulduz">${"★".repeat(review.rating)}${"☆".repeat(5 - review.rating)}</span></div>
+          <small class="meta">${new Date(review.created).toLocaleDateString("uz-UZ")}</small>
+          <p>${esc(review.body)}</p>
+        </article>`).join("")
+      : `<p class="meta">Hozircha tasdiqlangan sharh yo'q.</p>`;
+    const formHTML = data.myReview
+      ? `<p class="review-notice">${data.myReview.status === "pending" ? "Sharhingiz admin tasdig'ini kutmoqda." : "Bu mahsulotga sharh qoldirgansiz."}</p>`
+      : state.user
+        ? `<form class="form review-form" id="reviewForm">
+            <label>Baho<select name="rating" required><option value="5">5 — A'lo</option><option value="4">4 — Yaxshi</option><option value="3">3 — O'rtacha</option><option value="2">2 — Yomon</option><option value="1">1 — Juda yomon</option></select></label>
+            <label>Sharhingiz<textarea name="body" minlength="5" maxlength="1000" rows="3" required placeholder="Mahsulot haqidagi fikringiz"></textarea></label>
+            <p class="meta">Sharh admin tasdiqlagandan keyin saytda ko'rinadi.</p>
+            <div class="err" id="reviewError"></div><button class="btn line block" type="submit">Sharh yuborish</button>
+          </form>`
+        : `<button class="btn line" id="reviewLogin">Sharh yozish uchun kiring</button>`;
+    current.innerHTML = `<div class="row review-heading"><h2>Mijozlar sharhlari</h2><b>${data.count ? `${data.average} / 5 · ${data.count} ta` : ""}</b></div>${reviewsHTML}${formHTML}`;
+    if ($("#reviewLogin", current)) $("#reviewLogin", current).onclick = () => openAccount();
+    const form = $("#reviewForm", current);
+    if (form) form.onsubmit = async event => {
+      event.preventDefault();
+      const submit = form.querySelector('button[type="submit"]');
+      if (form.dataset.submitting) return;
+      form.dataset.submitting = "true";
+      submit.disabled = true;
+      try {
+        await api(`/products/${productId}/reviews`, {
+          method: "POST", body: Object.fromEntries(new FormData(form))
+        });
+        await loadProductReviews(productId);
+      } catch (error) {
+        $("#reviewError", form).textContent = error.message;
+        delete form.dataset.submitting;
+        submit.disabled = false;
+      }
+    };
+  } catch (error) {
+    const current = $("#productReviews");
+    if (current && Number(current.dataset.productId) === productId)
+      current.innerHTML = `<h2>Mijozlar sharhlari</h2><p class="err">Sharhlarni yuklab bo'lmadi: ${esc(error.message)}</p>`;
+  }
 }
 
 function openCheckout() {
@@ -266,9 +347,17 @@ async function openOrders() {
   $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button><h2>Buyurtmalarim</h2>` + (list.length ? list.map(o => `
     <div class="order"><div class="row"><b>№ ${o.id}</b><span class="status">${esc(o.status)}</span></div>
     <div class="meta">${new Date(o.created).toLocaleString("uz-UZ")} · ${esc(o.city)}, ${esc(o.addr)} · ${esc(o.pay)}</div>
+    ${orderTracker(o.status)}
     <div style="margin:8px 0">${o.items.map(i => `<div class="it">${ic(i.icon, 18)}<span>${esc(i.name)} × ${i.q}</span></div>`).join("")}</div>
-    <div class="row total"><span>Jami</span><span>${fmt(o.total)}</span></div></div>`).join("")
+    <div class="row total"><span>Jami</span><span>${fmt(o.total)}</span></div>
+    <button class="btn line block reorder-order" type="button" data-reorder="${esc(o.id)}">Qayta xarid qilish</button></div>`).join("")
     : `<div class="empty"><b>Buyurtmalar yo'q</b>Birinchi buyurtmangizni bering — XARID10 promokodi bilan 10% chegirma.</div>`);
+  $("#modalBox").querySelectorAll("[data-reorder]").forEach(button => {
+    button.onclick = () => {
+      const order = list.find(item => item.id === button.dataset.reorder);
+      if (order) reorderOrder(order);
+    };
+  });
 }
 
 function renderMessagesList(messages) {

@@ -99,7 +99,7 @@ function shell(me) {
     <span class="sp"></span><button class="mini" id="tgTest">Telegramni tekshirish</button><a href="/" class="mini" style="text-decoration:none">Saytga o'tish</a><button class="mini" id="out">Chiqish (${esc(me.name)})</button></div></div>
     <div class="wrap"><div class="a-tabs" id="tabs">
       <button data-t="stats">Statistika</button><button data-t="orders">Buyurtmalar</button><button data-t="products">Mahsulotlar</button>
-      <button data-t="slides">Slaydlar</button><button data-t="promos">Promokodlar</button><button data-t="messages">Xabar yuborish</button></div>
+      <button data-t="reviews">Sharhlar</button><button data-t="slides">Slaydlar</button><button data-t="promos">Promokodlar</button><button data-t="messages">Xabar yuborish</button></div>
       <div id="view"></div></div>`;
   $("#tgTest").onclick = async () => { try { await api("/admin/telegram-test", { method: "POST" }); toast("Telegramga sinov xabari yuborildi"); } catch (e) { toast("Telegram xatosi: " + e.message); } };
   $("#out").onclick = () => { localStorage.removeItem("bz_admin_token"); loginView(); };
@@ -110,7 +110,7 @@ function shell(me) {
 async function render() {
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
   $("#view").innerHTML = `<p class="meta">Yuklanmoqda...</p>`;
-  try { await ({ stats: viewStats, orders: viewOrders, products: viewProducts, slides: viewSlides, promos: viewPromos, messages: viewMessages })[tab](); }
+  try { await ({ stats: viewStats, orders: viewOrders, products: viewProducts, reviews: viewReviews, slides: viewSlides, promos: viewPromos, messages: viewMessages })[tab](); }
   catch (e) { if (e.status === 401 || e.status === 403) { localStorage.removeItem("bz_admin_token"); loginView("Qayta kiring."); } else toast(e.message); }
 }
 
@@ -344,6 +344,32 @@ async function viewOrders() {
     const id = e.target.dataset.oid; if (!id) return;
     try { await api("/admin/orders/" + id, { method: "PATCH", body: { status: e.target.value } }); toast("Holat yangilandi"); }
     catch (err) { toast(err.message); render(); }
+  };
+}
+
+async function viewReviews() {
+  const list = cache.reviews = await api("/admin/reviews");
+  $("#view").innerHTML = `<div class="panel"><h2>Tasdiqlanishi kutilayotgan sharhlar</h2>
+    ${list.length ? list.map(review => `<article class="order">
+      <div class="row"><b>${esc(review.productName)}</b><span>${"★".repeat(review.rating)}${"☆".repeat(5 - review.rating)}</span></div>
+      <p class="meta">${esc(review.userName)} · ID ${esc(review.userCode)} · ${new Date(review.created).toLocaleString("uz-UZ")}</p>
+      <p style="white-space:pre-wrap;margin:8px 0 12px">${esc(review.body)}</p>
+      <button class="mini" data-review-approve="${esc(review.id)}">Tasdiqlash</button>
+      <button class="mini del" data-review-reject="${esc(review.id)}">Rad etish</button>
+    </article>`).join("") : `<p class="meta">Tasdiqlanishi kutilayotgan sharh yo'q.</p>`}
+    </div>`;
+  $("#view").onclick = async event => {
+    const approve = event.target.closest("[data-review-approve]");
+    const reject = event.target.closest("[data-review-reject]");
+    if (!approve && !reject) return;
+    if (reject && !confirm("Sharhni rad etib o'chirasizmi?")) return;
+    const id = (approve || reject).dataset[approve ? "reviewApprove" : "reviewReject"];
+    try {
+      if (approve) await api("/admin/reviews/" + encodeURIComponent(id), { method: "PATCH", body: { status: "approved" } });
+      else await api("/admin/reviews/" + encodeURIComponent(id), { method: "DELETE" });
+      toast(approve ? "Sharh tasdiqlandi" : "Sharh rad etildi");
+      render();
+    } catch (error) { toast(error.message); }
   };
 }
 

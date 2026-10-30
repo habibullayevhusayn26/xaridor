@@ -140,6 +140,25 @@ html.overlay-open{overflow:hidden}
 .tabs button{flex:1;padding:10px;border-radius:10px;background:var(--bg);font-weight:600}
 .tabs button.on{border:1.5px solid var(--sun);background:#fff;color:var(--ink)}
 .order{border:1.5px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.order-tracker{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;list-style:none;margin:16px 0}
+.order-tracker li{display:grid;justify-items:center;gap:5px;position:relative;text-align:center;color:var(--mute)}
+.order-tracker li:not(:last-child)::after{content:"";position:absolute;top:13px;left:calc(50% + 17px);right:calc(-50% + 17px);height:2px;background:var(--line)}
+.order-tracker li.complete:not(:last-child)::after{background:var(--sun)}
+.order-tracker li span{z-index:1;display:grid;place-items:center;width:27px;height:27px;border:2px solid var(--line);border-radius:50%;background:#fff;font-size:12px}
+.order-tracker li.complete{color:var(--ink)}
+.order-tracker li.complete span{border-color:var(--sun);background:#fff8e6}
+.order-tracker li small{font-size:10px;line-height:1.2}
+.order-cancelled{margin:14px 0;color:var(--coral);font-weight:600}
+.reorder-order{margin-top:12px}
+.product-reviews{margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}
+.review-heading{align-items:center;margin-bottom:12px}
+.review-heading h2{font-size:20px}
+.review{padding:12px 0;border-bottom:1px solid var(--line)}
+.review .row{align-items:center}
+.review p{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere}
+.review-stars{color:#d99300;letter-spacing:1px}
+.review-form{margin-top:16px}
+.review-notice{margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff8e6;color:var(--ink)}
 .message-unread{border-left:4px solid var(--teal)}
 .message-title{display:block;width:100%;text-align:left;font-weight:600}
 .message-unread .message-title::after{content:"Yangi";float:right;color:var(--teal);font-size:12px}

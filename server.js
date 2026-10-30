@@ -42,6 +42,9 @@ const TELEGRAM_USER_BUTTON = "🔎 Foydalanuvchini qidirish";
 const TELEGRAM_ORDER_BUTTON = "📦 Buyurtmani qidirish";
 const TELEGRAM_PROMOS_BUTTON = "🎟 Promokodlar";
 const TELEGRAM_ADD_PROMO_BUTTON = "➕ Promokod qo'shish";
+const TELEGRAM_REPORT_BUTTON = "📊 Savdo hisoboti";
+const TELEGRAM_BROADCAST_BUTTON = "📢 Ommaviy xabar";
+const TELEGRAM_MESSAGE_STATS_BUTTON = "📈 Xabar statistikasi";
 
 // ---- Telegram ----
 async function tgCall(method, payload, timeout = 10000) {
@@ -79,7 +82,7 @@ const normPhone = s => {
 const fmtSum = n => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " so'm";
 const ah = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-let db, users, products, orders, counters, slides, promos, promoUses, messages;
+let db, users, products, orders, counters, slides, promos, promoUses, messages, reviews, messageCampaigns;
 
 const promoOut = p => ({
   code: p.code, type: p.type, value: p.value, active: !!p.active,
@@ -279,10 +282,14 @@ async function flushTelegram() {
 const telegramSearches = new Map();
 const telegramPromoFlows = new Set();
 const telegramMessageFlows = new Map();
+const telegramBroadcastFlows = new Set();
+const telegramBroadcastDrafts = new Map();
 const telegramKeyboard = {
   keyboard: [
     [{ text: TELEGRAM_USER_BUTTON }, { text: TELEGRAM_ORDER_BUTTON }],
-    [{ text: TELEGRAM_PROMOS_BUTTON }, { text: TELEGRAM_ADD_PROMO_BUTTON }]
+    [{ text: TELEGRAM_PROMOS_BUTTON }, { text: TELEGRAM_ADD_PROMO_BUTTON }],
+    [{ text: TELEGRAM_REPORT_BUTTON }, { text: TELEGRAM_MESSAGE_STATS_BUTTON }],
+    [{ text: TELEGRAM_BROADCAST_BUTTON }]
   ],
   resize_keyboard: true,
   is_persistent: true
@@ -290,6 +297,108 @@ const telegramKeyboard = {
 const telegramMenu = () => ({ text: "Kerakli qidiruv turini tanlang:", reply_markup: telegramKeyboard });
 const telegramSend = (chatId, text, replyMarkup = telegramKeyboard) =>
   tgCall("sendMessage", { chat_id: chatId, text, reply_markup: replyMarkup });
+
+function telegramPeriodRange(period, now = new Date()) {
+  const offset = 5 * 60 * 60 * 1000;
+  const localNow = new Date(now.getTime() + offset);
+  const localStart = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), localNow.getUTCDate()));
+  if (period === "week") localStart.setUTCDate(localStart.getUTCDate() - ((localStart.getUTCDay() + 6) % 7));
+  if (period === "month") localStart.setUTCDate(1);
+  return {
+    start: new Date(localStart.getTime() - offset),
+    end: now,
+    label: period === "today" ? "Bugun" : period === "week" ? "Shu hafta" : "Shu oy"
+  };
+}
+
+async function showTelegramReport(chatId, period) {
+  if (!["today", "week", "month"].includes(period))
+    return telegramSend(chatId, "Hisobot davri noto'g'ri. /report today|week|month");
+  const range = telegramPeriodRange(period);
+  const match = { created: { $gte: range.start, $lte: range.end }, status: { $ne: "Bekor qilindi" } };
+  const [summary, topProducts] = await Promise.all([
+    orders.aggregate([
+      { $match: match },
+      { $group: { _id: null, orders: { $sum: 1 }, revenue: { $sum: "$total" } } }
+    ]).toArray(),
+    orders.aggregate([
+      { $match: match }, { $unwind: "$items" },
+      { $group: { _id: "$items.name", quantity: { $sum: "$items.q" }, revenue: { $sum: { $multiply: ["$items.price", "$items.q"] } } } },
+      { $sort: { quantity: -1 } }, { $limit: 5 }
+    ]).toArray()
+  ]);
+  const totals = summary[0] || { orders: 0, revenue: 0 };
+  const productsText = topProducts.length
+    ? topProducts.map((product, index) => `${index + 1}. ${product._id} — ${product.quantity} dona`).join("\n")
+    : "Sotuv bo'lmadi.";
+  await telegramSend(chatId,
+    `${range.label} hisoboti\nBuyurtmalar: ${totals.orders}\nTushum: ${fmtSum(totals.revenue)}\n\nKo'p sotilganlar:\n${productsText}`);
+}
+
+async function showTelegramReportMenu(chatId) {
+  await telegramSend(chatId, "Hisobot davrini tanlang:", {
+    inline_keyboard: [[
+      { text: "Bugun", callback_data: "report:today" },
+      { text: "Hafta", callback_data: "report:week" },
+      { text: "Oy", callback_data: "report:month" }
+    ]]
+  });
+}
+
+async function showTelegramMessageStats(chatId) {
+  const campaigns = await messageCampaigns.find().sort({ created: -1 }).limit(10).toArray();
+  if (!campaigns.length) return telegramSend(chatId, "Hozircha ommaviy xabar kampaniyalari yo'q.");
+  const lines = await Promise.all(campaigns.map(async campaign => {
+    const [stats] = await messages.aggregate([
+      { $match: { campaignId: campaign._id } },
+      { $group: { _id: null, delivered: { $sum: 1 }, read: { $sum: { $cond: [{ $ne: ["$readAt", null] }, 1, 0] } } } }
+    ]).toArray();
+    const delivered = stats?.delivered || 0;
+    const read = stats?.read || 0;
+    const date = new Date(campaign.created).toLocaleString("uz-UZ");
+    return `${date} · ${campaign.title}\nYetkazildi: ${delivered}/${campaign.recipientCount} · O'qildi: ${read}`;
+  }));
+  await telegramSend(chatId, `So'nggi ommaviy xabarlar:\n\n${lines.join("\n\n")}`);
+}
+
+async function sendTelegramBroadcast(chatId, draft) {
+  const campaignId = new ObjectId();
+  let recipients = [];
+  let campaignCreated = false;
+  try {
+    recipients = await users.find({ role: "user" }, { projection: { _id: 1 } }).toArray();
+    if (!recipients.length) return telegramSend(chatId, "Xabar yuborilmadi: foydalanuvchilar topilmadi.");
+    await messageCampaigns.insertOne({
+      _id: campaignId, title: draft.title, body: draft.body,
+      recipientCount: recipients.length, sentCount: 0, status: "sending",
+      created: new Date(), senderTelegramId: String(chatId)
+    });
+    campaignCreated = true;
+    for (let offset = 0; offset < recipients.length; offset += 500) {
+      const created = new Date();
+      const batch = recipients.slice(offset, offset + 500).map(user => ({
+        _id: new ObjectId(), userId: user._id, type: "admin",
+        title: draft.title, body: draft.body, campaignId,
+        readAt: null, created
+      }));
+      await messages.insertMany(batch);
+      await messageCampaigns.updateOne({ _id: campaignId }, { $set: { sentCount: offset + batch.length } });
+    }
+    await messageCampaigns.updateOne({ _id: campaignId }, { $set: { status: "sent", sentAt: new Date() } });
+  } catch (error) {
+    const delivered = campaignCreated ? await messages.countDocuments({ campaignId }) : 0;
+    if (campaignCreated) await messageCampaigns.updateOne({ _id: campaignId }, {
+      $set: { status: delivered ? "partial" : "failed", sentCount: delivered, error: error.message.slice(0, 300) }
+    });
+    console.error("Telegram ommaviy xabari to'liq yuborilmadi:", error);
+    await telegramSend(chatId, campaignCreated
+      ? `Ommaviy xabar qisman yuborildi: ${delivered}/${recipients.length}. /messagestats orqali holatni tekshiring.`
+      : "Ommaviy xabar yuborilmadi. Server logini tekshiring va qayta urinib ko'ring.");
+    return;
+  }
+  await telegramSend(chatId,
+    `Ommaviy xabar yuborildi.\nKampaniya: ${String(campaignId)}\nYetkazildi: ${recipients.length}/${recipients.length}\nO'qilganlar holatini /messagestats orqali ko'ring.`);
+}
 
 function telegramPromoDetails(p) {
   const discount = p.type === "percent" ? `${p.value}%` : fmtSum(p.value);
@@ -506,6 +615,36 @@ async function handleTelegramCallback(callback) {
     }
     return;
   }
+  if (type === "report" && ["today", "week", "month"].includes(id)) {
+    await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Hisobot tayyorlanmoqda." });
+    await showTelegramReport(callback.message.chat.id, id);
+    return;
+  }
+  if (type === "bc" && ["confirm", "cancel"].includes(id)) {
+    const chatId = String(callback.message.chat.id);
+    const draft = telegramBroadcastDrafts.get(chatId);
+    if (!draft || draft.status !== "ready") {
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Tasdiqlash oynasi eskirgan." });
+      return;
+    }
+    if (Date.now() - draft.created > 10 * 60 * 1000) {
+      telegramBroadcastDrafts.delete(chatId);
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Tasdiqlash vaqti tugadi." });
+      await telegramSend(chatId, "Ommaviy xabar tasdiqlash muddati tugadi. /broadcast bilan qaytadan boshlang.");
+      return;
+    }
+    if (id === "cancel") {
+      telegramBroadcastDrafts.delete(chatId);
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Bekor qilindi." });
+      await telegramSend(chatId, "Ommaviy xabar bekor qilindi.");
+      return;
+    }
+    draft.status = "sending";
+    await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Yuborish boshlandi." });
+    telegramBroadcastDrafts.delete(chatId);
+    await sendTelegramBroadcast(chatId, draft);
+    return;
+  }
   if (type === "promo" && /^[A-Z0-9_-]{3,24}$/.test(id) && ["toggle", "delete"].includes(action)) {
     if (action === "delete") {
       const result = await promos.deleteOne({ code: id });
@@ -545,17 +684,73 @@ async function handleTelegramUpdate(update) {
   const command = match?.[1].toLowerCase();
   const inlineQuery = match?.[2]?.trim();
   const chatId = String(message.chat.id);
-  if (command) telegramMessageFlows.delete(chatId);
+  if (command) {
+    telegramMessageFlows.delete(chatId);
+    if (command !== "broadcast") {
+      telegramBroadcastFlows.delete(chatId);
+      telegramBroadcastDrafts.delete(chatId);
+    }
+  }
   if (["start", "help"].includes(command)) {
     telegramSearches.delete(String(message.chat.id));
     telegramPromoFlows.delete(String(message.chat.id));
-    await reply("Foydalanuvchi va buyurtmalarni qidiring, promokodlarni boshqaring va foydalanuvchilarga xabar yuboring.\n\n/promos — kodlar ro'yxati\n/addpromo — yangi kod qo'shish\n/editpromo KOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|- — tahrirlash\n/promo KOD on|off|delete — yoqish/o'chirish\n/cancel — joriy amalni bekor qilish\n\nFormat: KOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|-");
+    telegramBroadcastFlows.delete(chatId);
+    telegramBroadcastDrafts.delete(chatId);
+    await reply("Foydalanuvchi va buyurtmalarni boshqaring.\n\n/promos — promokodlar\n/addpromo — yangi kod\n/report today|week|month — savdo hisoboti\n/broadcast — barcha userlarga xabar yuborish\n/messagestats — xabar kampaniyalari statistikasi\n/cancel — joriy amalni bekor qilish");
     return;
   }
   if (command === "cancel") {
     telegramSearches.delete(chatId);
     telegramPromoFlows.delete(chatId);
+    telegramMessageFlows.delete(chatId);
+    telegramBroadcastFlows.delete(chatId);
+    telegramBroadcastDrafts.delete(chatId);
     return reply("Joriy amal bekor qilindi.");
+  }
+  if (command === "report" || text === TELEGRAM_REPORT_BUTTON) {
+    telegramSearches.delete(chatId);
+    telegramPromoFlows.delete(chatId);
+    telegramMessageFlows.delete(chatId);
+    telegramBroadcastFlows.delete(chatId);
+    telegramBroadcastDrafts.delete(chatId);
+    if (inlineQuery) return showTelegramReport(chatId, inlineQuery.toLowerCase());
+    return showTelegramReportMenu(chatId);
+  }
+  if (["messagestats", "xabarstatistika"].includes(command) || text === TELEGRAM_MESSAGE_STATS_BUTTON) {
+    telegramSearches.delete(chatId);
+    telegramPromoFlows.delete(chatId);
+    telegramMessageFlows.delete(chatId);
+    telegramBroadcastFlows.delete(chatId);
+    telegramBroadcastDrafts.delete(chatId);
+    return showTelegramMessageStats(chatId);
+  }
+  if (command === "broadcast" || text === TELEGRAM_BROADCAST_BUTTON) {
+    telegramSearches.delete(chatId);
+    telegramPromoFlows.delete(chatId);
+    telegramMessageFlows.delete(chatId);
+    telegramBroadcastDrafts.delete(chatId);
+    telegramBroadcastFlows.add(chatId);
+    return reply("Barcha foydalanuvchilarga yuboriladigan xabarni shu formatda yozing:\nSarlavha | Xabar matni\n\nXabar yuborishdan oldin qabul qiluvchilar soni va matnni tasdiqlaysiz. Bekor qilish uchun /cancel.");
+  }
+  if (telegramBroadcastFlows.has(chatId) && !command) {
+    const separator = text.indexOf("|");
+    const title = separator < 0 ? "" : text.slice(0, separator).trim();
+    const body = separator < 0 ? "" : text.slice(separator + 1).trim();
+    if (!title || !body || title.length > 100 || body.length > 2000)
+      return reply("Format noto'g'ri yoki matn juda uzun. 100 belgigacha sarlavha va 2000 belgigacha matn yuboring:\nSarlavha | Xabar matni");
+    const recipientCount = await users.countDocuments({ role: "user" });
+    if (!recipientCount) {
+      telegramBroadcastFlows.delete(chatId);
+      return reply("Xabar yuborilmadi: foydalanuvchilar topilmadi.");
+    }
+    telegramBroadcastFlows.delete(chatId);
+    telegramBroadcastDrafts.set(chatId, { title, body, recipientCount, status: "ready", created: Date.now() });
+    return telegramSend(chatId,
+      `Ommaviy xabarni tasdiqlang.\nQabul qiluvchilar: ${recipientCount}\n\nSarlavha: ${title}\n\n${body}`,
+      { inline_keyboard: [[
+        { text: `✅ Yuborish (${recipientCount})`, callback_data: "bc:confirm" },
+        { text: "Bekor qilish", callback_data: "bc:cancel" }
+      ]] });
   }
   if (telegramMessageFlows.has(chatId) && !command) {
     const userCode = telegramMessageFlows.get(chatId);
@@ -582,11 +777,18 @@ async function handleTelegramUpdate(update) {
     return reply(`${userCode} foydalanuvchisiga xabar yuborildi.`);
   }
   if (["promos", "promokodlar"].includes(command) || text === TELEGRAM_PROMOS_BUTTON) {
+    telegramMessageFlows.delete(chatId);
+    telegramBroadcastFlows.delete(chatId);
+    telegramBroadcastDrafts.delete(chatId);
     telegramSearches.delete(String(message.chat.id));
     telegramPromoFlows.delete(String(message.chat.id));
     return showTelegramPromos(message.chat.id);
   }
   if (["addpromo", "promokod"].includes(command) || text === TELEGRAM_ADD_PROMO_BUTTON) {
+    telegramMessageFlows.delete(chatId);
+    telegramBroadcastFlows.delete(chatId);
+    telegramBroadcastDrafts.delete(chatId);
+    telegramSearches.delete(chatId);
     telegramSearches.delete(String(message.chat.id));
     telegramPromoFlows.add(String(message.chat.id));
     return reply("Yangi promokod ma'lumotlarini bitta qatorda yuboring:\nKOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|-\nMisol: BAHOR10 percent 10 2027-03-31 100 1 200000\nCheksiz limit yoki minimal xarid bo'lmasa - yozing. XARID10 faqat birinchi xaridga.");
@@ -799,6 +1001,62 @@ app.get("/api/promos/:code", ah(async (req, res) => {
 }));
 app.get("/api/products", ah(async (req, res) =>
   res.json((await products.find({ active: true }).sort({ sold: -1 }).toArray()).map(productOut))));
+app.get("/api/products/:id/reviews", auth(false), ah(async (req, res) => {
+  const productId = Number(req.params.id);
+  if (!Number.isSafeInteger(productId)) return res.status(404).json({ error: "Mahsulot topilmadi." });
+  const product = await products.findOne({ _id: productId, active: true }, { projection: { _id: 1 } });
+  if (!product) return res.status(404).json({ error: "Mahsulot topilmadi." });
+  const [list, totals, myReview] = await Promise.all([
+    reviews.find({ productId, status: "approved" }).sort({ created: -1 }).limit(50).toArray(),
+    reviews.aggregate([
+      { $match: { productId, status: "approved" } },
+      { $group: { _id: null, count: { $sum: 1 }, average: { $avg: "$rating" } } }
+    ]).toArray(),
+    req.user?.role === "user" ? reviews.findOne({ productId, userId: req.user._id }) : null
+  ]);
+  const average = totals[0] ? Math.round(totals[0].average * 10) / 10 : 0;
+  res.json({
+    count: totals[0]?.count || 0, average,
+    reviews: list.map(review => ({
+      id: String(review._id), name: review.userName, rating: review.rating,
+      body: review.body, created: review.created
+    })),
+    myReview: myReview ? { status: myReview.status, rating: myReview.rating, body: myReview.body } : null
+  });
+}));
+app.post("/api/products/:id/reviews", auth(), ah(async (req, res) => {
+  const productId = Number(req.params.id);
+  const rating = Number(req.body.rating);
+  const body = String(req.body.body || "").trim();
+  if (!Number.isSafeInteger(productId)) return res.status(404).json({ error: "Mahsulot topilmadi." });
+  if (req.user.role !== "user") return res.status(403).json({ error: "Sharhni faqat foydalanuvchi akkaunti bilan yuborish mumkin." });
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5)
+    return res.status(400).json({ error: "Bahoni 1 dan 5 gacha tanlang." });
+  if (body.length < 5 || body.length > 1000)
+    return res.status(400).json({ error: "Sharh 5 dan 1000 belgigacha bo'lishi kerak." });
+  const product = await products.findOne({ _id: productId, active: true }, { projection: { _id: 1 } });
+  if (!product) return res.status(404).json({ error: "Mahsulot topilmadi." });
+  const existing = await reviews.findOne({ productId, userId: req.user._id });
+  if (existing) {
+    if (existing.status !== "pending")
+      return res.status(409).json({ error: "Bu mahsulotga sharh allaqachon yuborilgan." });
+    await reviews.updateOne({ _id: existing._id, status: "pending" }, {
+      $set: { rating, body, updated: new Date() }
+    });
+    return res.json({ ok: true, status: "pending" });
+  }
+  try {
+    await reviews.insertOne({
+      _id: new ObjectId(), productId, userId: req.user._id,
+      userCode: req.user.userCode, userName: req.user.name,
+      rating, body, status: "pending", created: new Date()
+    });
+  } catch (error) {
+    if (error.code === 11000) return res.status(409).json({ error: "Bu mahsulotga sharh allaqachon yuborilgan." });
+    throw error;
+  }
+  res.json({ ok: true, status: "pending" });
+}));
 app.get("/api/products/:id/image", ah(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id)) return res.status(404).end();
@@ -1034,6 +1292,37 @@ admin.post("/messages", ah(async (req, res) => {
   res.json({ ok: true });
 }));
 
+admin.get("/reviews", ah(async (req, res) => {
+  const list = await reviews.find({ status: "pending" }).sort({ created: 1 }).limit(200).toArray();
+  const productIds = [...new Set(list.map(review => review.productId))];
+  const productList = await products.find({ _id: { $in: productIds } }, { projection: { name: 1 } }).toArray();
+  const names = new Map(productList.map(product => [product._id, product.name]));
+  res.json(list.map(review => ({
+    id: String(review._id), productId: review.productId,
+    productName: names.get(review.productId) || "O'chirilgan mahsulot",
+    userName: review.userName, userCode: review.userCode,
+    rating: review.rating, body: review.body, created: review.created
+  })));
+}));
+
+admin.patch("/reviews/:id", ah(async (req, res) => {
+  if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Sharh ID noto'g'ri." });
+  if (req.body.status !== "approved") return res.status(400).json({ error: "Sharh holati noto'g'ri." });
+  const result = await reviews.updateOne(
+    { _id: new ObjectId(req.params.id), status: "pending" },
+    { $set: { status: "approved", moderatedAt: new Date() } }
+  );
+  if (!result.modifiedCount) return res.status(404).json({ error: "Tasdiqlanmagan sharh topilmadi." });
+  res.json({ ok: true });
+}));
+
+admin.delete("/reviews/:id", ah(async (req, res) => {
+  if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Sharh ID noto'g'ri." });
+  const result = await reviews.deleteOne({ _id: new ObjectId(req.params.id), status: "pending" });
+  if (!result.deletedCount) return res.status(404).json({ error: "Tasdiqlanmagan sharh topilmadi." });
+  res.json({ ok: true });
+}));
+
 admin.get("/slides", ah(async (req, res) =>
   res.json((await slides.find().sort({ created: 1, _id: 1 }).toArray()).map(s => ({
     id: String(s._id), title: s.title, description: s.description, category: s.category || "",
@@ -1226,7 +1515,8 @@ async function main() {
   users = db.collection("users"); products = db.collection("products");
   orders = db.collection("orders"); counters = db.collection("counters");
   slides = db.collection("slides"); promos = db.collection("promos"); promoUses = db.collection("promoUses");
-  messages = db.collection("messages");
+  messages = db.collection("messages"); reviews = db.collection("reviews");
+  messageCampaigns = db.collection("messageCampaigns");
   await users.createIndex({ phone: 1 }, { unique: true });
   await migrateUserCodes();
   await orders.createIndex({ userId: 1, created: -1 });
@@ -1237,6 +1527,10 @@ async function main() {
   await promoUses.createIndex({ code: 1, uses: -1 });
   await messages.createIndex({ userId: 1, created: -1 });
   await messages.createIndex({ userId: 1, readAt: 1 });
+  await reviews.createIndex({ productId: 1, userId: 1 }, { unique: true });
+  await reviews.createIndex({ status: 1, created: 1 });
+  await messageCampaigns.createIndex({ created: -1 });
+  await messages.createIndex({ campaignId: 1, readAt: 1 });
 
   const slideSeed = await counters.updateOne(
     { _id: "slide-seed-v1" }, { $setOnInsert: { created: new Date() } }, { upsert: true }
