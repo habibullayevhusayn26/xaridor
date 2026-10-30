@@ -278,6 +278,7 @@ async function flushTelegram() {
 
 const telegramSearches = new Map();
 const telegramPromoFlows = new Set();
+const telegramMessageFlows = new Map();
 const telegramKeyboard = {
   keyboard: [
     [{ text: TELEGRAM_USER_BUTTON }, { text: TELEGRAM_ORDER_BUTTON }],
@@ -343,6 +344,7 @@ async function findTelegramUser(query) {
     text: `Foydalanuvchi ma'lumotlari\nID: ${user.userCode}\nIsm: ${user.name}\nTelefon: ${user.phone}\nRol: ${user.role}\nRo'yxatdan o'tgan: ${user.created ? new Date(user.created).toLocaleString("uz-UZ") : "Noma'lum"}\nSaytdagi holati: ${user.blockedAt ? "Bloklangan" : "Faol"}\nJami buyurtmalar: ${totalOrders}\n\nBuyurtmalar:\n${orderInfo}${moreOrders}`,
     replyMarkup: {
       inline_keyboard: [
+        [{ text: "✉️ Xabar yuborish", callback_data: `usr:${user.userCode}:message` }],
         [{ text: "🔑 Vaqtinchalik parol berish", callback_data: `usr:${user.userCode}:reset` }],
         [{ text: user.blockedAt ? "🔓 Blokdan chiqarish" : "🚫 Saytdan bloklash",
           callback_data: `usr:${user.userCode}:${user.blockedAt ? "unblock" : "block"}` }]
@@ -440,6 +442,16 @@ async function handleTelegramCallback(callback) {
     return;
   }
   const [type, id, action] = String(callback.data || "").split(":");
+  if (type === "usr" && USER_CODE_PATTERN.test(id) && action === "message") {
+    const chatId = String(callback.message.chat.id);
+    telegramSearches.delete(chatId);
+    telegramPromoFlows.delete(chatId);
+    telegramMessageFlows.set(chatId, id);
+    await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Xabar yuborish rejimi yoqildi." });
+    await telegramSend(callback.message.chat.id,
+      `Foydalanuvchi ${id} uchun xabarni quyidagi formatda yuboring:\nSarlavha | Xabar matni\n\nBekor qilish uchun /cancel yuboring.`);
+    return;
+  }
   if (type === "usr" && USER_CODE_PATTERN.test(id) && action === "reset") {
     const temporaryPassword = await resetUserPassword(id);
     if (!temporaryPassword) {
@@ -532,11 +544,42 @@ async function handleTelegramUpdate(update) {
   const match = text.match(/^\/([a-z]+)(?:@\w+)?(?:\s+([\s\S]+))?$/i);
   const command = match?.[1].toLowerCase();
   const inlineQuery = match?.[2]?.trim();
+  const chatId = String(message.chat.id);
+  if (command) telegramMessageFlows.delete(chatId);
   if (["start", "help"].includes(command)) {
     telegramSearches.delete(String(message.chat.id));
     telegramPromoFlows.delete(String(message.chat.id));
-    await reply("Foydalanuvchi va buyurtmalarni qidiring, promokodlarni boshqaring.\n\n/promos — kodlar ro'yxati\n/addpromo — yangi kod qo'shish\n/editpromo KOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|- — tahrirlash\n/promo KOD on|off|delete — yoqish/o'chirish\n\nFormat: KOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|-");
+    await reply("Foydalanuvchi va buyurtmalarni qidiring, promokodlarni boshqaring va foydalanuvchilarga xabar yuboring.\n\n/promos — kodlar ro'yxati\n/addpromo — yangi kod qo'shish\n/editpromo KOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|- — tahrirlash\n/promo KOD on|off|delete — yoqish/o'chirish\n/cancel — joriy amalni bekor qilish\n\nFormat: KOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|-");
     return;
+  }
+  if (command === "cancel") {
+    telegramSearches.delete(chatId);
+    telegramPromoFlows.delete(chatId);
+    return reply("Joriy amal bekor qilindi.");
+  }
+  if (telegramMessageFlows.has(chatId) && !command) {
+    const userCode = telegramMessageFlows.get(chatId);
+    const separator = text.indexOf("|");
+    const title = separator < 0 ? "" : text.slice(0, separator).trim();
+    const body = separator < 0 ? "" : text.slice(separator + 1).trim();
+    if (!title || !body || title.length > 100 || body.length > 2000)
+      return reply("Format noto'g'ri yoki matn juda uzun. 100 belgigacha sarlavha va 2000 belgigacha matn yuboring:\nSarlavha | Xabar matni");
+    const user = await users.findOne({ userCode, role: "user" }, { projection: { _id: 1 } });
+    if (!user) {
+      telegramMessageFlows.delete(chatId);
+      return reply("Foydalanuvchi topilmadi. Qidiruvni qayta boshlang.");
+    }
+    try {
+      await messages.insertOne({
+        _id: new ObjectId(), userId: user._id, type: "admin", title, body,
+        readAt: null, created: new Date()
+      });
+    } catch (error) {
+      console.warn("Telegram orqali xabar saqlanmadi:", error.message);
+      return reply("Xabarni saqlab bo'lmadi. Qayta urinib ko'ring.");
+    }
+    telegramMessageFlows.delete(chatId);
+    return reply(`${userCode} foydalanuvchisiga xabar yuborildi.`);
   }
   if (["promos", "promokodlar"].includes(command) || text === TELEGRAM_PROMOS_BUTTON) {
     telegramSearches.delete(String(message.chat.id));

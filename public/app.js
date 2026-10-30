@@ -32,13 +32,22 @@ const disc = p => Math.round((1 - p.price / p.old) * 100);
 
 /* ---------- toast / overlay ---------- */
 let tt;
-function toast(msg, duration = 2200, notification = false) {
+let toastAction = null;
+function toast(msg, duration = 2200, notification = false, onClick = null) {
   const t = $("#toast");
   t.textContent = msg;
   t.classList.toggle("notification", notification);
+  toastAction = onClick;
   t.hidden = false;
-  clearTimeout(tt); tt = setTimeout(() => (t.hidden = true), duration);
+  clearTimeout(tt); tt = setTimeout(() => { t.hidden = true; toastAction = null; }, duration);
 }
+$("#toast").onclick = () => {
+  if (!toastAction) return;
+  const action = toastAction;
+  toastAction = null;
+  $("#toast").hidden = true;
+  action();
+};
 function closeAll() {
   $("#cartDrawer").hidden = true; $("#accountDrawer").hidden = true; $("#modal").hidden = true; $("#overlay").hidden = true;
   document.documentElement.classList.remove("overlay-open");
@@ -122,7 +131,10 @@ async function refreshMessages(notify = false) {
     state.unreadMessages = result.unreadCount;
     updateBadges();
     if (notify && result.unreadCount > previousUnread) {
-      toast(`Sizda ${result.unreadCount} ta o'qilmagan xabar bor`, 6000, true);
+      const message = result.messages.find(item => !item.read);
+      const preview = message && message.body.length > 120 ? `${message.body.slice(0, 120)}…` : message?.body;
+      toast(message ? `${message.title}\n${preview}` : `Sizda ${result.unreadCount} ta o'qilmagan xabar bor`,
+        6000, true, message ? () => openMessages(message.id) : null);
     }
   } catch (err) {
     if (err.status === 401 || err.status === 403) logout();
@@ -259,46 +271,54 @@ async function openOrders() {
     : `<div class="empty"><b>Buyurtmalar yo'q</b>Birinchi buyurtmangizni bering — XARID10 promokodi bilan 10% chegirma.</div>`);
 }
 
-async function openMessages() {
+function renderMessagesList(messages) {
+  $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button><h2>Xabarlar</h2>` +
+    (messages.length ? messages.map(message => `
+      <article class="order message-item ${message.read ? "" : "message-unread"}">
+        <button class="message-title" type="button" data-message-open="${esc(message.id)}">
+          ${esc(message.title)}
+        </button>
+      </article>`).join("") : `<div class="empty"><b>Xabarlar yo'q</b>Saytdan kelgan xabarlar shu yerda ko'rinadi.</div>`);
+  $("#modalBox").querySelectorAll("[data-message-open]").forEach(button => {
+    button.onclick = () => {
+      const message = messages.find(item => item.id === button.dataset.messageOpen);
+      if (message) showMessagePopup(message, messages);
+    };
+  });
+}
+
+function showMessagePopup(message, messages) {
+  $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button>
+    <button class="message-back" type="button" data-message-list>← Xabarlar</button>
+    <h2>${esc(message.title)}</h2>
+    <small class="meta">${new Date(message.created).toLocaleString("uz-UZ")}</small>
+    <div class="message-popup-body">${esc(message.body)}</div>
+    <p class="err" data-message-error hidden></p>`;
+  $("[data-message-list]", $("#modalBox")).onclick = () => renderMessagesList(messages);
+  if (message.read) return;
+  api("/messages/read", { method: "POST", body: { ids: [message.id] } }).then(readResult => {
+    message.read = true;
+    state.unreadMessages = readResult.unreadCount;
+    updateBadges();
+  }).catch(err => {
+    const error = $("[data-message-error]", $("#modalBox"));
+    if (error) {
+      error.textContent = `O'qilgan deb belgilab bo'lmadi: ${err.message}`;
+      error.hidden = false;
+    }
+  });
+}
+
+async function openMessages(messageId = null) {
   if (!state.user) return openAccount();
   showModal(`<h2>Xabarlar</h2><p class="meta">Yuklanmoqda...</p>`);
   try {
     const result = await api("/messages");
-    $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button><h2>Xabarlar</h2>` +
-      (result.messages.length ? result.messages.map(message => `
-        <article class="order message-item ${message.read ? "" : "message-unread"}">
-          <button class="message-title" type="button" aria-expanded="false" aria-controls="message-body-${esc(message.id)}" data-message-open="${esc(message.id)}">
-            ${esc(message.title)}
-          </button>
-          <div class="message-body" id="message-body-${esc(message.id)}" hidden>
-            <small class="meta">${new Date(message.created).toLocaleString("uz-UZ")}</small>
-            <p>${esc(message.body)}</p>
-            <small class="err" data-message-error="${esc(message.id)}" hidden></small>
-          </div>
-        </article>`).join("") : `<div class="empty"><b>Xabarlar yo'q</b>Saytdan kelgan xabarlar shu yerda ko'rinadi.</div>`);
-    $("#modalBox").querySelectorAll("[data-message-open]").forEach(button => {
-      button.onclick = async () => {
-        const message = result.messages.find(item => item.id === button.dataset.messageOpen);
-        const body = $(`#message-body-${button.dataset.messageOpen}`, $("#modalBox"));
-        const opening = body.hidden;
-        body.hidden = !opening;
-        button.setAttribute("aria-expanded", String(opening));
-        if (!opening || message.read) return;
-        try {
-          const readResult = await api("/messages/read", {
-            method: "POST", body: { ids: [message.id] }
-          });
-          message.read = true;
-          state.unreadMessages = readResult.unreadCount;
-          button.closest(".message-item").classList.remove("message-unread");
-          updateBadges();
-        } catch (err) {
-          const error = $(`[data-message-error="${message.id}"]`, $("#modalBox"));
-          error.textContent = `O'qilgan deb belgilab bo'lmadi: ${err.message}`;
-          error.hidden = false;
-        }
-      };
-    });
+    state.unreadMessages = result.unreadCount;
+    updateBadges();
+    renderMessagesList(result.messages);
+    const message = messageId && result.messages.find(item => item.id === messageId);
+    if (message) showMessagePopup(message, result.messages);
   } catch (err) {
     $("#modalBox").innerHTML = `<button class="x" data-close aria-label="Yopish">${ic("x", 20)}</button><h2>Xabarlar</h2><p class="err">${esc(err.message)}</p>`;
   }
