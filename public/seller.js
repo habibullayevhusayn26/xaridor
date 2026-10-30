@@ -163,6 +163,14 @@ function renderDashboard(seller) {
       <div><h1>${esc(seller.storeName)}</h1><p class="meta">${esc(seller.name)} · ${esc(seller.email)} · ${esc(seller.address)}</p></div>
       <button class="btn line" id="sellerLogout">Chiqish</button>
     </div>
+    ${seller.telegramLinked ? `<section class="seller-panel"><h2>Telegram bildirishnomalari</h2><p class="seller-notice">Telegram bot ulangan. Yangi buyurtmalar shu akkauntga yuboriladi.</p></section>` : `<section class="seller-panel">
+      <h2>Telegram botni ulash</h2>
+      <p class="meta">Buyurtmalar faqat Telegram akkauntingizga yuboriladi. Parol yuborish shart emas.</p>
+      <button class="btn sun" id="sellerTelegramLink">Botni ulash</button>
+      <a class="btn line" id="sellerTelegramOpen" href="#" target="_blank" rel="noopener" hidden>Telegramda Start bosing</a>
+      <button class="btn line" id="sellerTelegramRefresh" type="button">Ulanganini tekshirish</button>
+      <div class="err" id="sellerTelegramError" role="alert"></div>
+    </section>`}
     <section class="seller-panel">
       <h2 id="productFormTitle">Yangi mahsulot qo'shish</h2>
       <form class="form" id="sellerProductForm">
@@ -185,6 +193,26 @@ function renderDashboard(seller) {
     </section>
   </div>`;
   $("#sellerLogout").onclick = logout;
+  const linkButton = $("#sellerTelegramLink");
+  if (linkButton) linkButton.onclick = async () => {
+    linkButton.disabled = true;
+    $("#sellerTelegramError").textContent = "";
+    try {
+      const result = await api("/seller/telegram-link", { method: "POST" });
+      const link = $("#sellerTelegramOpen");
+      link.href = result.botUrl;
+      link.hidden = false;
+      linkButton.textContent = "Yangi havola olish";
+    } catch (error) {
+      $("#sellerTelegramError").textContent = error.message;
+    } finally { linkButton.disabled = false; }
+  };
+  const refreshTelegram = $("#sellerTelegramRefresh");
+  if (refreshTelegram) refreshTelegram.onclick = async () => {
+    refreshTelegram.disabled = true;
+    try { renderDashboard(await api("/seller/me")); }
+    catch (error) { $("#sellerTelegramError").textContent = error.message; }
+  };
   $("#sellerCancelEdit").onclick = () => resetProductForm();
   $("#sellerProductForm").imageFile.onchange = showImagePreview;
   $("#sellerProductForm").onsubmit = saveProduct;

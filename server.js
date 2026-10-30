@@ -34,6 +34,7 @@ const SECRET = env("JWT_SECRET");
 const TG_TOKEN = env("TG_BOT_TOKEN");
 const TG_CHAT = env("TG_CHAT_ID");
 const TG_ADMIN_ID = env("TG_ADMIN_ID") || TG_CHAT;
+let telegramBotUsername = "";
 const PORT = env("PORT") || 3000;
 const GOOGLE_CLIENT_ID = env("GOOGLE_CLIENT_ID");
 const googleOAuthClient = new OAuth2Client(GOOGLE_CLIENT_ID || undefined);
@@ -264,16 +265,112 @@ async function nextProductId() {
 
 // ---- Buyurtmani Telegramga yuborish (muvaffaqiyatsiz bo'lsa qayta uriniladi) ----
 const sending = new Set();
+async function orderTelegramTargets(order) {
+  const productIds = order.items.map(item => item.id);
+  const productList = await products.find({ _id: { $in: productIds } }, {
+    projection: { _id: 1, sellerId: 1, sellerStoreName: 1 }
+  }).toArray();
+  const productById = new Map(productList.map(product => [product._id, product]));
+  const sellerIds = [...new Set(order.items.map(item =>
+    item.sellerId || productById.get(item.id)?.sellerId
+  ).filter(Boolean).map(String))].map(id => new ObjectId(id));
+  const sellerList = sellerIds.length
+    ? await sellers.find({ _id: { $in: sellerIds } }, {
+      projection: { storeName: 1, telegramChatId: 1, status: 1 }
+    }).toArray()
+    : [];
+  const sellerById = new Map(sellerList.map(seller => [String(seller._id), seller]));
+  const groups = new Map();
+  for (const item of order.items) {
+    const product = productById.get(item.id);
+    const sellerId = item.sellerId || product?.sellerId;
+    if (!sellerId) {
+      const group = groups.get("admin") || { key: "admin", chatId: TG_CHAT, kind: "admin", items: [] };
+      group.items.push(item);
+      groups.set("admin", group);
+      continue;
+    }
+    const seller = sellerById.get(String(sellerId));
+    if (!seller || seller.status !== "approved" || !seller.telegramChatId)
+      throw new Error(`Sotuvchi Telegram botini ulab bo'lmagan: ${item.sellerStoreName || product?.sellerStoreName || seller?.storeName || sellerId}`);
+    const key = `seller:${seller._id}`;
+    const group = groups.get(key) || {
+      key, chatId: seller.telegramChatId, kind: "seller",
+      storeName: item.sellerStoreName || product?.sellerStoreName || seller.storeName, items: []
+    };
+    group.items.push(item);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
 async function sendOrderToTelegram(o) {
   if (sending.has(o._id)) return;
   sending.add(o._id);
   try {
-    const lines = o.items.map(i => `• ${i.name} × ${i.q} = ${fmtSum(i.price * i.q)}`).join("\n");
-    const text = `Yangi buyurtma ${o._id}\n\n${o.name}\n${o.phone}\n${o.city}, ${o.addr}\nTo'lov: ${o.pay}${o.promo ? "\nPromokod: " + o.promo : ""}\n\n${lines}\n\nJami: ${fmtSum(o.total)}`;
-    await tgCall("sendMessage", { chat_id: TG_CHAT, text });
+    const targets = await orderTelegramTargets(o);
+    for (const target of targets) {
+      const current = await orders.findOne({ _id: o._id }, { projection: { tgSentTo: 1 } });
+      if (current?.tgSentTo?.includes(target.key)) continue;
+      const lines = target.items.map(item => `• ${item.name} × ${item.q} = ${fmtSum(item.price * item.q)}`).join("\n");
+      const subtotal = target.items.reduce((sum, item) => sum + item.price * item.q, 0);
+      const title = target.kind === "seller"
+        ? `Yangi buyurtma ${o._id}\nDo'kon: ${target.storeName}`
+        : `Yangi buyurtma ${o._id}`;
+      const text = `${title}\n\n${o.name}\n${o.phone}\n${o.city}, ${o.addr}\nTo'lov: ${o.pay}${o.promo ? "\nPromokod: " + o.promo : ""}\n\n${lines}\n\nMahsulotlar jami: ${fmtSum(subtotal)}`;
+      await tgCall("sendMessage", { chat_id: target.chatId, text });
+      await orders.updateOne({ _id: o._id }, { $addToSet: { tgSentTo: target.key } });
+    }
     await orders.updateOne({ _id: o._id }, { $set: { tgSent: true } });
   } finally {
     sending.delete(o._id);
+  }
+}
+
+const sellerApplicationsSending = new Set();
+async function notifySellerApplication(seller) {
+  if (sellerApplicationsSending.has(String(seller._id))) return;
+  sellerApplicationsSending.add(String(seller._id));
+  try {
+    const sent = await tgCall("sendMessage", {
+      chat_id: TG_CHAT,
+      text: `Yangi sotuvchi arizasi\nDo'kon: ${seller.storeName}\nIsm: ${seller.name}\nEmail: ${seller.email}\nTelefon: ${seller.phone}\nManzil: ${seller.address}`,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "✅ Tasdiqlash", callback_data: `seller:${seller._id}:approve` },
+          { text: "❌ Rad etish", callback_data: `seller:${seller._id}:reject` }
+        ]]
+      }
+    });
+    await sellers.updateOne({ _id: seller._id, status: "pending" }, {
+      $set: {
+        telegramApplicationNotifiedAt: new Date(),
+        telegramApplicationChatId: String(TG_CHAT),
+        telegramApplicationMessageId: sent.result.message_id
+      }
+    });
+    try {
+      await tgCall("pinChatMessage", {
+        chat_id: TG_CHAT, message_id: sent.result.message_id, disable_notification: true
+      });
+    } catch (error) {
+      console.warn("Yangi sotuvchi xabarini pin qilib bo'lmadi:", error.message);
+    }
+  } finally {
+    sellerApplicationsSending.delete(String(seller._id));
+  }
+}
+async function flushSellerApplications() {
+  try {
+    const pending = await sellers.find({
+      status: "pending", telegramApplicationNotifiedAt: { $exists: false }
+    }).sort({ created: 1 }).limit(20).toArray();
+    for (const seller of pending) {
+      try { await notifySellerApplication(seller); }
+      catch (error) { console.warn("Sotuvchi arizasi Telegramga yuborilmadi:", error.message); }
+    }
+  } catch (error) {
+    console.warn("Sotuvchi arizalarini Telegramdan olishda xatolik:", error.message);
   }
 }
 async function flushTelegram() {
@@ -503,6 +600,21 @@ async function setUserBlocked(userCode, blocked) {
   return result.matchedCount > 0;
 }
 
+async function reviewSellerApplication(id, status, reviewedBy, telegramMessage = null) {
+  if (!ObjectId.isValid(id)) return null;
+  const selector = { _id: new ObjectId(id), status: "pending" };
+  if (status === "approved") selector.emailVerifiedAt = { $exists: true, $ne: null };
+  if (telegramMessage) {
+    selector.telegramApplicationChatId = String(telegramMessage.chat.id);
+    selector.telegramApplicationMessageId = telegramMessage.message_id;
+  }
+  return sellers.findOneAndUpdate(
+    selector,
+    { $set: { status, reviewedAt: new Date(), reviewedBy } },
+    { returnDocument: "after" }
+  );
+}
+
 async function resetUserPassword(userCode) {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
   const temporaryPassword = Array.from({ length: 14 }, () => alphabet[crypto.randomInt(alphabet.length)]).join("");
@@ -552,11 +664,34 @@ async function changeOrderStatus(id, status) {
 }
 
 async function handleTelegramCallback(callback) {
+  const [type, id, action] = String(callback.data || "").split(":");
+  if (type === "seller" && ObjectId.isValid(id) && ["approve", "reject"].includes(action)) {
+    if (String(callback.from?.id) !== TG_ADMIN_ID || String(callback.message?.chat?.id) !== String(TG_CHAT)) {
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Ruxsat yo'q." });
+      return;
+    }
+    const status = action === "approve" ? "approved" : "rejected";
+    const seller = await reviewSellerApplication(id, status, String(callback.from.id), callback.message);
+    if (!seller) {
+      await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Ariza topilmadi yoki allaqachon ko'rib chiqilgan." });
+      return;
+    }
+    await tgCall("answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: status === "approved" ? "Sotuvchi tasdiqlandi." : "Ariza rad etildi."
+    });
+    await tgCall("editMessageText", {
+      chat_id: callback.message.chat.id,
+      message_id: callback.message.message_id,
+      text: `${callback.message.text}\n\nHolat: ${status === "approved" ? "✅ Tasdiqlandi" : "❌ Rad etildi"}`,
+      reply_markup: { inline_keyboard: [] }
+    });
+    return;
+  }
   if (String(callback.from?.id) !== TG_ADMIN_ID || callback.message?.chat?.type !== "private") {
     await tgCall("answerCallbackQuery", { callback_query_id: callback.id, text: "Ruxsat yo'q." });
     return;
   }
-  const [type, id, action] = String(callback.data || "").split(":");
   if (type === "usr" && USER_CODE_PATTERN.test(id) && action === "message") {
     const chatId = String(callback.message.chat.id);
     telegramSearches.delete(chatId);
@@ -681,14 +816,39 @@ async function handleTelegramUpdate(update) {
   const message = update.message;
   if (!message?.text || message.chat?.type !== "private") return;
   const reply = text => telegramSend(message.chat.id, text);
-  if (String(message.from?.id) !== TG_ADMIN_ID) {
-    if (message.text.trim().startsWith("/")) await reply("Bu buyruqdan foydalanishga ruxsat yo'q.");
-    return;
-  }
   const text = message.text.trim();
   const match = text.match(/^\/([a-z]+)(?:@\w+)?(?:\s+([\s\S]+))?$/i);
   const command = match?.[1].toLowerCase();
   const inlineQuery = match?.[2]?.trim();
+  if (command === "start" && /^link_[a-f0-9]{48}$/.test(inlineQuery || "")) {
+    const sellerReply = text =>
+      tgCall("sendMessage", { chat_id: message.chat.id, text, reply_markup: { remove_keyboard: true } });
+    const tokenHash = crypto.createHash("sha256").update(inlineQuery.slice(5)).digest("hex");
+    try {
+      const seller = await sellers.findOneAndUpdate(
+        {
+          telegramLinkTokenHash: tokenHash,
+          telegramLinkExpiresAt: { $gt: new Date() },
+          status: "approved",
+          telegramChatId: { $exists: false }
+        },
+        {
+          $set: { telegramChatId: String(message.chat.id), telegramLinkedAt: new Date() },
+          $unset: { telegramLinkTokenHash: "", telegramLinkExpiresAt: "" }
+        },
+        { returnDocument: "after" }
+      );
+      if (!seller) return sellerReply("Telegram ulash kodi eskirgan, ishlatilgan yoki sotuvchi arizasi hali tasdiqlanmagan. Saytdagi sotuvchi kabinetidan yangi havola oling.");
+      return sellerReply(`Telegram ulandi!\n${seller.storeName} do'konining yangi buyurtmalari shu chatga yuboriladi.`);
+    } catch (error) {
+      if (error.code === 11000) return sellerReply("Bu Telegram akkaunti boshqa sotuvchiga ulangan.");
+      throw error;
+    }
+  }
+  if (String(message.from?.id) !== TG_ADMIN_ID) {
+    if (text.startsWith("/")) await reply("Bu buyruqdan foydalanishga ruxsat yo'q.");
+    return;
+  }
   const chatId = String(message.chat.id);
   if (command) {
     telegramMessageFlows.delete(chatId);
@@ -928,7 +1088,7 @@ const publicUser = u => ({
 const sellerOut = seller => ({
   id: String(seller._id), name: seller.name, phone: seller.phone, email: seller.email,
   storeName: seller.storeName, address: seller.address, status: seller.status,
-  emailVerified: !!seller.emailVerifiedAt
+  emailVerified: !!seller.emailVerifiedAt, telegramLinked: !!seller.telegramChatId
 });
 function readSellerProfile(body, defaultName) {
   const name = String(body.name || defaultName || "").trim().slice(0, 80);
@@ -957,7 +1117,9 @@ async function publicProductListOut(list) {
   }));
 }
 const orderOut = o => ({ id: o._id, name: o.name, phone: o.phone, city: o.city, addr: o.addr, pay: o.pay,
-  total: o.total, promo: o.promo, status: o.status, items: o.items, created: o.created.toISOString(), tgSent: !!o.tgSent });
+  total: o.total, promo: o.promo, status: o.status,
+  items: o.items.map(({ id, name, icon, q, price }) => ({ id, name, icon, q, price })),
+  created: o.created.toISOString(), tgSent: !!o.tgSent });
 
 function readProductImage(value) {
   if (typeof value !== "string") throw new Error("Mahsulot rasmi noto'g'ri.");
@@ -1173,10 +1335,8 @@ app.post("/api/seller/google", sellerAuthLimiter, ah(async (req, res) => {
         return res.status(409).json({ error: "Bu telefon raqami allaqachon sotuvchi akkauntida ishlatilgan." });
       throw error;
     }
-    tgCall("sendMessage", {
-      chat_id: TG_CHAT,
-      text: `Yangi sotuvchi ro'yxatdan o'tdi.\nDo'kon: ${seller.storeName}\nIsm: ${seller.name}\nEmail: ${seller.email}\nTelefon: ${seller.phone}\nHolat: Google orqali tasdiqlangan, admin ko'rib chiqishi kutilmoqda.`
-    }).catch(error => console.warn("Telegramga sotuvchi xabari yuborilmadi:", error.message));
+    notifySellerApplication(seller).catch(error =>
+      console.warn("Telegramga sotuvchi arizasi yuborilmadi:", error.message));
     const token = jwt.sign({ id: String(seller._id), role: "seller", ver: seller.tokenVersion || 0 }, SECRET, { expiresIn: "30d" });
     return res.status(201).json({ token, seller: sellerOut(seller) });
   } else {
@@ -1275,7 +1435,15 @@ app.post("/api/orders", orderLimiter, auth(), ah(async (req, res) => {
   const promoCode = String(b.promo || "").trim().toUpperCase();
   const selectedPromo = promoCode ? await promos.findOne(promoFilter(promoCode)) : null;
   if (promoCode && !selectedPromo) return res.status(400).json({ error: "Promokod noto'g'ri, muddati tugagan yoki limiti to'lgan." });
-  const items = found.map(p => ({ id: p._id, name: p.name, icon: p.icon, q: qty.get(p._id), price: p.price }));
+  const items = found.map(p => ({
+    id: p._id, name: p.name, icon: p.icon, q: qty.get(p._id), price: p.price,
+    ...(p.sellerId ? {
+      sellerId: String(p.sellerId),
+      sellerStoreName: p.sellerStoreName || null
+    } : {})
+  }));
+  try { await orderTelegramTargets({ items }); }
+  catch (error) { return res.status(409).json({ error: "Buyurtmani qabul qilib bo'lmadi. " + error.message }); }
   const sub = items.reduce((s, i) => s + i.price * i.q, 0);
   if (selectedPromo?.minOrderAmount && sub < selectedPromo.minOrderAmount)
     return res.status(400).json({ error: `Bu promokod ${fmtSum(selectedPromo.minOrderAmount)} yoki undan yuqori xaridga amal qiladi.` });
@@ -1387,13 +1555,7 @@ admin.patch("/sellers/:id", ah(async (req, res) => {
   if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Sotuvchi ID noto'g'ri." });
   if (!["approved", "rejected"].includes(req.body.status))
     return res.status(400).json({ error: "Sotuvchi holati noto'g'ri." });
-  const selector = { _id: new ObjectId(req.params.id), status: "pending" };
-  if (req.body.status === "approved") selector.emailVerifiedAt = { $exists: true, $ne: null };
-  const result = await sellers.findOneAndUpdate(
-    selector,
-    { $set: { status: req.body.status, reviewedAt: new Date(), reviewedBy: req.user._id } },
-    { returnDocument: "after" }
-  );
+  const result = await reviewSellerApplication(req.params.id, req.body.status, req.user._id);
   if (!result) return res.status(409).json({ error: "Sotuvchi topilmadi yoki email hali tasdiqlanmagan." });
   res.json(sellerOut(result));
 }));
@@ -1639,11 +1801,34 @@ admin.delete("/products/:id", ah(async (req, res) => {
 const sellerRouter = express.Router();
 sellerRouter.use(auth(), sellerOnly);
 sellerRouter.get("/me", (req, res) => res.json(sellerOut(req.user)));
+sellerRouter.post("/telegram-link", ah(async (req, res) => {
+  if (req.user.status !== "approved")
+    return res.status(403).json({ error: "Telegram botni faqat tasdiqlangan sotuvchi ulay oladi." });
+  if (req.user.telegramChatId)
+    return res.status(409).json({ error: "Telegram bot allaqachon ulangan." });
+  if (!telegramBotUsername)
+    return res.status(503).json({ error: "Telegram bot hozircha tayyor emas. Birozdan so'ng qayta urinib ko'ring." });
+  const rawToken = crypto.randomBytes(24).toString("hex");
+  const updated = await sellers.updateOne(
+    { _id: req.user._id, status: "approved", telegramChatId: { $exists: false } },
+    {
+      $set: {
+        telegramLinkTokenHash: crypto.createHash("sha256").update(rawToken).digest("hex"),
+        telegramLinkExpiresAt: new Date(Date.now() + 10 * 60 * 1000)
+      }
+    }
+  );
+  if (!updated.matchedCount)
+    return res.status(409).json({ error: "Telegram bot allaqachon ulangan yoki sotuvchi holati o'zgargan. Sahifani yangilang." });
+  res.json({ botUrl: `https://t.me/${telegramBotUsername}?start=link_${rawToken}` });
+}));
 sellerRouter.get("/products", ah(async (req, res) =>
   res.json((await products.find({ sellerId: req.user._id }).sort({ _id: -1 }).toArray()).map(productOut))));
 sellerRouter.post("/products", ah(async (req, res) => {
   if (req.user.status !== "approved")
     return res.status(403).json({ error: "Mahsulot qo'shish uchun admin tasdig'ini kuting." });
+  if (!req.user.telegramChatId)
+    return res.status(403).json({ error: "Avval sotuvchi kabinetidan Telegram botni ulang." });
   let product, image;
   try {
     product = readProduct({ ...req.body, active: true });
@@ -1697,7 +1882,8 @@ async function main() {
   // 1) Telegram tokenini tekshirish
   try {
     const me = await tgCall("getMe");
-    console.log("Telegram bot ulandi: @" + me.result.username);
+    telegramBotUsername = me.result.username;
+    console.log("Telegram bot ulandi: @" + telegramBotUsername);
   } catch (e) {
     if (e.tgStatus === 401 || e.tgStatus === 404) {
       console.error("[XATO] TG_BOT_TOKEN noto'g'ri. @BotFather dan olingan tokenni tekshiring.");
@@ -1723,6 +1909,8 @@ async function main() {
   await users.createIndex({ phone: 1 }, { unique: true });
   await sellers.createIndex({ email: 1 }, { unique: true });
   await sellers.createIndex({ phone: 1 }, { unique: true });
+  await sellers.createIndex({ telegramChatId: 1 }, { unique: true, sparse: true });
+  await sellers.createIndex({ telegramLinkTokenHash: 1 }, { unique: true, sparse: true });
   await sellers.createIndex({ status: 1, created: 1 });
   await migrateUserCodes();
   await orders.createIndex({ userId: 1, created: -1 });
@@ -1780,6 +1968,8 @@ async function main() {
   // 5) Yuborilmay qolgan buyurtmalarni Telegramga qayta yuborish
   flushTelegram();
   setInterval(flushTelegram, 60 * 1000).unref();
+  flushSellerApplications();
+  setInterval(flushSellerApplications, 60 * 1000).unref();
   pollTelegram();
 
   app.listen(PORT, () => console.log(`Xaridor ishlayapti: http://localhost:${PORT}  (admin: /admin.html)`));

@@ -8,7 +8,7 @@
   4. *Connect > Drivers* dan ulanish manzilini (`mongodb+srv://...`) oling. Parol maxsus belgilarga ega bo'lsa, URL-kodlang.
 - **Telegram bot** (MAJBURIY): @BotFather > /newbot > tokenni oling. Botga /start yozing.
   Chat ID: @userinfobot ga yozing, u sizning ID ingizni aytadi. Guruhga yuborish uchun botni guruhga qo'shing
-  (guruh ID si manfiy son bo'ladi).
+  (guruh ID si manfiy son bo'ladi). Sotuvchi arizalarini pin qilish uchun botga guruhda xabar pinlash huquqini bering.
 
 ## 2. Lokal ishga tushirish
 ```
@@ -40,18 +40,18 @@ Google akkaunt emailni o'zi tekshiradi; sayt Google parolini so'ramaydi va tasdi
    `https://SAYT.onrender.com/api/health` manziliga har 10 daqiqada so'rov yuboring.
 
 ## 4. Telegram
-- Har bir buyurtma saqlangach botga yuboriladi. Telegram vaqtincha ishlamasa, buyurtma yo'qolmaydi:
-  server uni belgilab qo'yadi va har daqiqada qayta yuboradi.
+- Sotuvchi mahsuloti buyurtma qilinsa, faqat tegishli sotuvchiga; saytning o'z mahsuloti buyurtma qilinsa admin Telegramiga yuboriladi. Aralash savatda xabarlar tegishli qismlarga ajratiladi. Telegram vaqtincha ishlamasa, buyurtma yo'qolmaydi: server uni belgilab qo'yadi va har daqiqada qayta yuboradi. Sotuvchi Telegramini ulab olmaguncha uning mahsulotiga buyurtma berish bloklanadi.
+- Yangi sotuvchi arizasi `TG_CHAT_ID` chatiga inline **Tasdiqlash/Rad etish** tugmalari bilan yuboriladi va pin qilinadi. Guruhda tugmalarni ishlatish uchun `TG_ADMIN_ID` ga adminning shaxsiy Telegram ID sini yozing; botga guruhda xabar pinlash huquqini bering.
 - Admin panelda "Telegramni tekshirish" tugmasi sinov xabarini yuboradi,
   statistikada yuborilmay qolgan buyurtmalar soni ko'rinadi.
 - Admin botdagi **Foydalanuvchini qidirish** yoki **Buyurtmani qidirish** tugmasi orqali foydalanuvchini telefon/7 belgili ID bilan, buyurtmani esa `XR1234567` raqami bilan topadi. Buyurtma holatini botdagi tugmalar orqali o'zgartirish, foydalanuvchi ma'lumotlari va so'nggi buyurtmalarini ko'rish, hisobini bloklash yoki blokdan chiqarish mumkin. `/report today|week|month` savdo hisobotini, `/messagestats` esa ommaviy xabar kampaniyalari bo'yicha saytga yetkazilgan va o'qilgan xabarlar sonini ko'rsatadi. `/help` barcha buyruqlarni ko'rsatadi.
 - Bot admini `/promos` bilan promokodlarni ko'radi, `/addpromo` bilan yangi kod qo'shadi; bot tugmalari orqali kodni yoqish/o'chirish va o'chirish mumkin. Kod formati: `KOD percent|fixed MIQDOR SANA|- JAMI|- USER|- MIN|-`; masalan, `BAHOR10 percent 10 2027-03-31 100 1 200000`. `MIN` — minimal savdo summasi, `JAMI` — umumiy qo'llashlar soni, `USER` — bir foydalanuvchiga limit.
 - Buyurtma holati o'zgarganda foydalanuvchiga xabarlar bo'limida bildirishnoma saqlanadi. Admin paneldagi **Xabar yuborish** bo'limidan ism, telefon yoki ID bilan foydalanuvchini topib shaxsiy xabar yuborish mumkin. Telegram botda foydalanuvchini qidirib, **Xabar yuborish** tugmasi bilan `Sarlavha | Xabar matni` formatida shaxsiy xabar jo'natish mumkin. `/broadcast` barcha saytdagi foydalanuvchilarga ommaviy xabar tayyorlaydi; bot yuborishdan oldin qabul qiluvchilar soni va matnni ko'rsatib tasdiq so'raydi. Ommaviy xabar saytning xabarlar qutisiga saqlanadi; shu sababli "yetkazildi" soni saytdagi qutiga muvaffaqiyatli saqlangan xabarlarni, "o'qildi" esa foydalanuvchi xabarni ochganini bildiradi. `/cancel` joriy amalni bekor qiladi. Foydalanuvchi qayta kirganda o'qilmagan xabar haqida ekran chetida bildirishnoma ko'radi va uni bosib aynan shu xabarni ochadi; xabarlar ro'yxatidagi sarlavha ham alohida oynada xabarni ochadi.
 - Foydalanuvchi parolni unutsa, saytdagi support tugmasi orqali [@habibullayev_28](https://t.me/habibullayev_28) ga murojaat qiladi. Botda foydalanuvchini topgach, admin vaqtinchalik parol berishi mumkin; asl parol ko'rinmaydi va user vaqtinchalik parol bilan kirgach yangisini o'rnatishi shart.
-- Bot qidiruviga ruxsat berilgan Telegram akkauntining ID sini `TG_ADMIN_ID` ga kiriting. Bu sozlama bo'sh bo'lsa, `TG_CHAT_ID` ishlatiladi; guruh chatidan qidiruv bajarilmaydi.
+- Bot qidiruviga ruxsat berilgan adminning shaxsiy Telegram akkaunt ID sini `TG_ADMIN_ID` ga kiriting. Guruhda sotuvchi arizasi tugmalarini bosish uchun ham shu ID ishlatiladi.
 
 ## 5. Moslash
-- Sotuvchilar `/seller.html` sahifasida Google orqali kiradi; yangi sotuvchi do'kon ma'lumotlarini to'ldirib ariza yuboradi. Google emailni tasdiqlaydi, admin paneldagi **Sotuvchilar** bo'limida admin arizani faollashtiradi; tasdiqlangan sotuvchilar mahsulot qo'shishi mumkin va mahsulotlar do'konda darhol ko'rinadi.
+- Sotuvchilar `/seller.html` sahifasida Google orqali kiradi; yangi sotuvchi do'kon ma'lumotlarini to'ldirib ariza yuboradi. Google emailni tasdiqlaydi, admin panel yoki Telegramdagi inline tugma orqali admin arizani faollashtiradi. Tasdiqlangach sotuvchi kabinetidagi Telegram ulash havolasini ochib botda **Start** bosadi; parol so'ralmaydi. Ulangan Telegram akkauntiga o'z mahsulotlarining buyurtmalari boradi.
 - Banner slaydlari admin panelning **Slaydlar** bo'limida boshqariladi; JPG, PNG yoki WebP (5 MB gacha) yuklash mumkin.
 - Promokodlar admin panelning **Promokodlar** bo'limida ham boshqariladi. Foizli yoki belgilangan summadagi chegirma, tugash sanasi, jami va foydalanuvchi boshiga limit hamda minimal savdo summasi sozlanadi.
 - Faqat akkauntiga tegishli buyurtmada mahsulot bor va buyurtma holati **Yetkazildi** bo'lgan foydalanuvchi baho va sharh yubora oladi. Sharh admin paneldagi **Sharhlar** bo'limida tasdiqlangandan keyin ommaga ko'rinadi. Bir foydalanuvchi har bir mahsulotga bitta sharh qoldiradi.
