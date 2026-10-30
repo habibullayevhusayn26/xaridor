@@ -408,13 +408,13 @@ function openAccount(mode = "login") {
 
 /* ---------- hero slider ---------- */
 let SLIDES = [
-  { title: "Yangi kolleksiya — 40% gacha chegirma", description: "Kiyim va poyabzal hafta davomida arzonroq.", icon: "shirt", bg: "linear-gradient(120deg,#0E5A5A,#17807A)", category: "kiyim" },
+  { title: "Yangi kolleksiya — 40% gacha chegirma", description: "Kiyim va poyabzal hafta davomida arzonroq.", icon: "shirt", bg: "linear-gradient(120deg,#F2A900,#17807A)", category: "kiyim" },
   { title: "Texnika bayrami", description: "Smartfon, noutbuk va quloqchinlar 12 oyga bo'lib to'lash bilan.", icon: "smartphone", bg: "linear-gradient(120deg,#25306B,#3E4FA8)", category: "elektronika" },
   { title: "Uyingiz uchun hammasi", description: "Idish-tovoq, yorug'lik va ro'zg'or buyumlari.", icon: "sofa", bg: "linear-gradient(120deg,#9A4A12,#D9812B)", category: "uy" }
 ];
 let si = 0, st;
 function renderHero() {
-  $("#hero").innerHTML = SLIDES.map((s, i) => `<div class="slide ${i ? "" : "on"}" style="background:${esc(s.bg || "linear-gradient(120deg,#0E5A5A,#17807A)")}">
+  $("#hero").innerHTML = SLIDES.map((s, i) => `<div class="slide ${i ? "" : "on"}" style="background:${esc(s.bg || "linear-gradient(120deg,#F2A900,#17807A)")}">
     ${s.image ? `<img class="hero-image" src="${esc(s.image)}" alt="">` : ""}
     <div class="slide-copy"><h2>${esc(s.title)}</h2><p>${esc(s.description)}</p>${s.category ? `<button class="btn sun" data-cat="${esc(s.category)}">Ko'rish</button>` : ""}</div>
     ${s.image ? "" : `<div class="big">${ic(s.icon || "sparkles", 160)}</div>`}</div>`).join("") +

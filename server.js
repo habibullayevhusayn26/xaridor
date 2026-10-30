@@ -67,7 +67,7 @@ const PAYS = ["Naqd", "Karta", "Muddatli"];
 const seed = JSON.parse(fs.readFileSync(path.join(__dirname, "seed.json"), "utf8"));
 const CATEGORIES = seed.categories;
 const DEFAULT_SLIDES = [
-  { title: "Yangi kolleksiya — 40% gacha chegirma", description: "Kiyim va poyabzal hafta davomida arzonroq.", icon: "shirt", bg: "linear-gradient(120deg,#0E5A5A,#17807A)", category: "kiyim" },
+  { title: "Yangi kolleksiya — 40% gacha chegirma", description: "Kiyim va poyabzal hafta davomida arzonroq.", icon: "shirt", bg: "linear-gradient(120deg,#F2A900,#17807A)", category: "kiyim" },
   { title: "Texnika bayrami", description: "Smartfon, noutbuk va quloqchinlar 12 oyga bo'lib to'lash bilan.", icon: "smartphone", bg: "linear-gradient(120deg,#25306B,#3E4FA8)", category: "elektronika" },
   { title: "Uyingiz uchun hammasi", description: "Idish-tovoq, yorug'lik va ro'zg'or buyumlari.", icon: "sofa", bg: "linear-gradient(120deg,#9A4A12,#D9812B)", category: "uy" }
 ];
@@ -781,7 +781,7 @@ app.get("/api/categories", (req, res) => res.json(CATEGORIES));
 app.get("/api/slides", ah(async (req, res) =>
   res.json((await slides.find().sort({ created: 1, _id: 1 }).toArray()).map(s => ({
     id: String(s._id), title: s.title, description: s.description, category: s.category || null,
-    icon: s.icon || "sparkles", bg: s.bg || "linear-gradient(120deg,#0E5A5A,#17807A)",
+    icon: s.icon || "sparkles", bg: s.bg || "linear-gradient(120deg,#F2A900,#17807A)",
     image: s.image ? `/api/slides/${s._id}/image` : null
   })))));
 app.get("/api/slides/:id/image", ah(async (req, res) => {
