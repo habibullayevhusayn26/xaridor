@@ -53,6 +53,21 @@ const TELEGRAM_SELLER_PRODUCTS_BUTTON = "Mahsulotlarim";
 const TELEGRAM_SELLER_PRODUCT_SEARCH_BUTTON = "Mahsulot ID";
 const TELEGRAM_SELLER_ORDER_SEARCH_BUTTON = "Buyurtma ID";
 const TELEGRAM_SELLER_HOME_BUTTON = "Asosiy menyu";
+const TELEGRAM_CUSTOMER_PRODUCTS_BUTTON = "Mahsulotlar";
+const TELEGRAM_CUSTOMER_SEARCH_BUTTON = "Mahsulot qidirish";
+const TELEGRAM_CUSTOMER_HELP_BUTTON = "Yordam";
+const TELEGRAM_CUSTOMER_SUPPORT_URL = "https://t.me/habibullayev_28";
+const PUBLIC_SITE_URL = env("PUBLIC_SITE_URL").replace(/\/+$/, "");
+if (PUBLIC_SITE_URL) {
+  try {
+    const siteUrl = new URL(PUBLIC_SITE_URL);
+    if (!["http:", "https:"].includes(siteUrl.protocol) || siteUrl.username || siteUrl.password)
+      throw new Error("PUBLIC_SITE_URL http yoki https manzili bo'lishi kerak.");
+  } catch (error) {
+    console.error("[XATO] PUBLIC_SITE_URL noto'g'ri:", error.message);
+    process.exit(1);
+  }
+}
 
 // ---- Telegram ----
 const TELEGRAM_PREMIUM_EMOJIS = new Map([
@@ -444,8 +459,8 @@ async function notifySellerApplication(seller) {
       text: `👤 Yangi sotuvchi arizasi\nDo'kon: ${seller.storeName}\nIsm: ${seller.name}\nEmail: ${seller.email}\nTelefon: ${seller.phone}\nManzil: ${seller.address}`,
       reply_markup: {
         inline_keyboard: [[
-          telegramButton("Tasdiqlash", "✅", { callback_data: `seller:${seller._id}:approve` }),
-          telegramButton("Rad etish", "⚠️", { callback_data: `seller:${seller._id}:reject` })
+          telegramButton("Tasdiqlash", "✅", { callback_data: `seller:${seller._id}:approve`, style: "success" }),
+          telegramButton("Rad etish", "⚠️", { callback_data: `seller:${seller._id}:reject`, style: "danger" })
         ]]
       }
     });
@@ -514,6 +529,17 @@ const telegramSellerKeyboard = {
   resize_keyboard: true,
   is_persistent: true
 };
+const telegramCustomerKeyboard = {
+  keyboard: [
+    [
+      telegramButton(TELEGRAM_CUSTOMER_PRODUCTS_BUTTON, "🛒", { style: "success" }),
+      telegramButton(TELEGRAM_CUSTOMER_SEARCH_BUTTON, "🔎", { style: "primary" })
+    ],
+    [telegramButton(TELEGRAM_CUSTOMER_HELP_BUTTON, "👋", { style: "primary" })]
+  ],
+  resize_keyboard: true,
+  is_persistent: true
+};
 const telegramAdminSellerKeyboard = {
   keyboard: [...telegramKeyboard.keyboard, ...telegramSellerKeyboard.keyboard],
   resize_keyboard: true,
@@ -531,7 +557,7 @@ const telegramSend = async (chatId, text, replyMarkup = null) =>
   tgCall("sendMessage", {
     chat_id: chatId,
     text,
-    reply_markup: replyMarkup || await defaultTelegramKeyboard(chatId, telegramKeyboard)
+    reply_markup: replyMarkup || await defaultTelegramKeyboard(chatId, telegramCustomerKeyboard)
   });
 const telegramSellerSend = async (chatId, text, replyMarkup = null) =>
   tgCall("sendMessage", {
@@ -539,6 +565,230 @@ const telegramSellerSend = async (chatId, text, replyMarkup = null) =>
     text,
     reply_markup: replyMarkup || await defaultTelegramKeyboard(chatId, telegramSellerKeyboard)
   });
+const telegramCustomerSearches = new Map();
+
+function telegramShopEmoji(categoryId) {
+  return ({
+    elektronika: "💳", texnika: "🏧", kiyim: "⭐️", poyabzal: "⭐️",
+    uy: "👛", gozallik: "🎁", bolalar: "👥", sport: "🏆", oziq: "💰"
+  })[categoryId] || "🛒";
+}
+
+async function showTelegramCustomerCategories(chatId, messageId = null) {
+  const available = new Set(await products.distinct("cat", { active: true }));
+  const categories = CATEGORIES.filter(category => available.has(category.id));
+  const keyboard = categories.length ? [[telegramButton("Barcha mahsulotlar", "🛒", {
+    callback_data: "shop:category:all:0", style: "success"
+  })]] : [];
+  for (let index = 0; index < categories.length; index += 2) {
+    keyboard.push(categories.slice(index, index + 2).map(category =>
+      telegramButton(category.name, telegramShopEmoji(category.id), {
+        callback_data: `shop:category:${category.id}:0`, style: "primary"
+      })
+    ));
+  }
+  if (PUBLIC_SITE_URL) {
+    keyboard.push([telegramButton("Saytda xarid qilish", "🚀", {
+      url: `${PUBLIC_SITE_URL}/#grid`, style: "success"
+    })]);
+  }
+  const replyMarkup = { inline_keyboard: keyboard };
+  const text = categories.length
+    ? "🛍 Mahsulot turini tanlang:"
+    : "🛍 Hozircha katalogda faol mahsulotlar yo'q.";
+  if (messageId) {
+    await tgCall("editMessageText", { chat_id: chatId, message_id: messageId, text, reply_markup });
+  } else {
+    await telegramSend(chatId, text, replyMarkup);
+  }
+}
+
+async function showTelegramCustomerProducts(chatId, categoryId, page = 0, messageId = null) {
+  if (categoryId !== "all" && !CATEGORIES.some(category => category.id === categoryId))
+    throw new Error("Telegram katalog kategoriyasi noto'g'ri.");
+  const filter = { active: true, ...(categoryId === "all" ? {} : { cat: categoryId }) };
+  const pageSize = 8;
+  const total = await products.countDocuments(filter);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.max(0, Math.min(Number(page) || 0, pageCount - 1));
+  const list = await products.find(filter).sort({ sold: -1, _id: 1 })
+    .skip(currentPage * pageSize).limit(pageSize).toArray();
+  const categoryName = CATEGORIES.find(category => category.id === categoryId)?.name || "Barcha mahsulotlar";
+  const text = list.length
+    ? `🛍 ${categoryName} · ${currentPage + 1}/${pageCount}\n\n` +
+      list.map((product, index) =>
+        `${index + 1}. ${product.name}\n   ${fmtSum(product.price)}${product.stock <= 0 ? " · Omborda yo'q" : ""}`
+      ).join("\n\n")
+    : "🛍 Bu bo'limda hozircha mahsulot yo'q.";
+  const keyboard = list.map(product => [
+    telegramButton(
+      `${product.name.slice(0, 34)} · ${fmtSum(product.price)}`,
+      "🛒",
+      { callback_data: `shop:product:${product._id}`, style: "primary" }
+    )
+  ]);
+  if (currentPage > 0 || currentPage + 1 < pageCount) {
+    keyboard.push([
+      ...(currentPage > 0 ? [telegramButton("Oldingi", "⬅️", {
+        callback_data: `shop:category:${categoryId}:${currentPage - 1}`, style: "primary"
+      })] : []),
+      ...(currentPage + 1 < pageCount ? [telegramButton("Keyingi", "➡️", {
+        callback_data: `shop:category:${categoryId}:${currentPage + 1}`, style: "primary"
+      })] : [])
+    ]);
+  }
+  keyboard.push([telegramButton("Bo'limlarni tanlash", "↩️", {
+    callback_data: "shop:categories", style: "primary"
+  })]);
+  if (PUBLIC_SITE_URL) {
+    keyboard.push([telegramButton("Saytda xarid qilish", "🚀", {
+      url: `${PUBLIC_SITE_URL}/#grid`, style: "success"
+    })]);
+  }
+  const replyMarkup = { inline_keyboard: keyboard };
+  if (messageId) {
+    await tgCall("editMessageText", { chat_id: chatId, message_id: messageId, text, reply_markup: replyMarkup });
+  } else {
+    await telegramSend(chatId, text, replyMarkup);
+  }
+}
+
+async function showTelegramCustomerProduct(chatId, productId, messageId) {
+  const product = await products.findOne({ _id: Number(productId), active: true });
+  if (!product) {
+    await tgCall("editMessageText", {
+      chat_id: chatId, message_id: messageId,
+      text: "Bu mahsulot endi mavjud emas.",
+      reply_markup: { inline_keyboard: [[telegramButton("Bo'limlarni tanlash", "↩️", {
+        callback_data: "shop:categories", style: "primary"
+      })]] }
+    });
+    return;
+  }
+  const categoryName = CATEGORIES.find(category => category.id === product.cat)?.name || product.cat;
+  const text = `🛒 ${product.name}\n\nBo'lim: ${categoryName}\nNarxi: ${fmtSum(product.price)}` +
+    `${product.old > product.price ? `\nEski narxi: ${fmtSum(product.old)}` : ""}` +
+    `\nReyting: ${product.rating} · Sotilgan: ${product.sold}\nOmbor: ${product.stock > 0 ? `${product.stock} dona` : "tugagan"}` +
+    `${product.descr ? `\n\n${product.descr}` : ""}`;
+  const keyboard = [];
+  if (product.stock > 0 && PUBLIC_SITE_URL) {
+    keyboard.push([telegramButton("Saytda xarid qilish", "🛒", {
+      url: `${PUBLIC_SITE_URL}/#grid`, style: "success"
+    })]);
+  }
+  keyboard.push([telegramButton("Bo'limga qaytish", "↩️", {
+    callback_data: `shop:category:${product.cat}:0`, style: "primary"
+  })]);
+  await tgCall("editMessageText", {
+    chat_id: chatId, message_id: messageId, text,
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function handleTelegramCustomerCallback(callback) {
+  const chat = callback.message?.chat;
+  const chatId = String(chat?.id || "");
+  if (chat?.type !== "private" || String(callback.from?.id) !== chatId ||
+      chatId === TG_ADMIN_ID) {
+    await tgCall("answerCallbackQuery", {
+      callback_query_id: callback.id, text: "Bu katalog tugmasidan foydalanishga ruxsat yo'q."
+    });
+    return;
+  }
+  const seller = await sellers.findOne({ telegramChatId: chatId, status: "approved" }, { projection: { _id: 1 } });
+  if (seller) {
+    await tgCall("answerCallbackQuery", {
+      callback_query_id: callback.id, text: "Katalog tugmasi xaridorlar uchun."
+    });
+    return;
+  }
+  const parts = String(callback.data || "").split(":");
+  const validCategory = parts[1] === "category" && parts.length === 4 &&
+    /^\d+$/.test(parts[3]) &&
+    (parts[2] === "all" || CATEGORIES.some(category => category.id === parts[2]));
+  const validProduct = parts[1] === "product" && parts.length === 3 &&
+    /^\d{1,12}$/.test(parts[2]) && Number.isSafeInteger(Number(parts[2]));
+  const validStaticAction = ["categories", "home"].includes(parts[1]) && parts.length === 2;
+  if (!validCategory && !validProduct && !validStaticAction) {
+    await tgCall("answerCallbackQuery", {
+      callback_query_id: callback.id, text: "Bu katalog tugmasi eskirgan."
+    });
+    return;
+  }
+  await tgCall("answerCallbackQuery", { callback_query_id: callback.id });
+  if (parts[1] === "categories" && parts.length === 2) {
+    return showTelegramCustomerCategories(chatId, callback.message.message_id);
+  }
+  if (parts[1] === "category" && parts.length === 4 && /^\d+$/.test(parts[3])) {
+    return showTelegramCustomerProducts(chatId, parts[2], Number(parts[3]), callback.message.message_id);
+  }
+  if (parts[1] === "product" && parts.length === 3 && /^\d{1,12}$/.test(parts[2])) {
+    return showTelegramCustomerProduct(chatId, parts[2], callback.message.message_id);
+  }
+  if (parts[1] === "home" && parts.length === 2) {
+    return tgCall("editMessageText", {
+      chat_id: chatId,
+      message_id: callback.message.message_id,
+      text: "👋 Xaridor botiga xush kelibsiz! Mahsulotlarni ko'ring yoki qidiruvdan foydalaning.",
+      reply_markup: { inline_keyboard: [[telegramButton("Mahsulotlarni ko'rish", "🛒", {
+        callback_data: "shop:categories", style: "success"
+      })]] }
+    });
+  }
+}
+
+async function handleTelegramCustomerMessage(message, command, text) {
+  const chatId = String(message.chat.id);
+  const reply = (body, markup = telegramCustomerKeyboard) =>
+    telegramSend(chatId, body, markup);
+  if (["start", "help"].includes(command)) {
+    telegramCustomerSearches.delete(chatId);
+    return reply("👋 Xaridor botiga xush kelibsiz!\n\n🛍 Mahsulotlarni ko'ring, 🔎 nomi bo'yicha qidiring yoki 👋 yordam oling.");
+  }
+  if (command === "cancel") {
+    telegramCustomerSearches.delete(chatId);
+    return reply("Qidiruv bekor qilindi.");
+  }
+  if (text === TELEGRAM_CUSTOMER_PRODUCTS_BUTTON || command === "products") {
+    telegramCustomerSearches.delete(chatId);
+    return showTelegramCustomerCategories(chatId);
+  }
+  if (text === TELEGRAM_CUSTOMER_SEARCH_BUTTON || command === "search") {
+    telegramCustomerSearches.set(chatId, Date.now() + 10 * 60 * 1000);
+    return reply("🔎 Mahsulot nomini yuboring. Bekor qilish uchun /cancel bosing.");
+  }
+  if (text === TELEGRAM_CUSTOMER_HELP_BUTTON || command === "support") {
+    telegramCustomerSearches.delete(chatId);
+    return reply("👋 Yordam kerakmi? Qo'llab-quvvatlash xizmatiga yozing.", {
+      inline_keyboard: [[telegramButton("Yordamga yozish", "💬", {
+        url: TELEGRAM_CUSTOMER_SUPPORT_URL, style: "primary"
+      })]]
+    });
+  }
+  const searchExpiresAt = telegramCustomerSearches.get(chatId);
+  if (searchExpiresAt) {
+    telegramCustomerSearches.delete(chatId);
+    if (Date.now() > searchExpiresAt)
+      return reply("Qidiruv vaqti tugadi. Menyudan qaytadan boshlang.");
+    const query = text.trim().slice(0, 80);
+    if (query.length < 2)
+      return reply("Kamida 2 ta belgidan iborat mahsulot nomini yuboring.");
+    const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const results = await products.find({
+      active: true, name: { $regex: escapedQuery, $options: "i" }
+    }).sort({ sold: -1 }).limit(8).toArray();
+    if (!results.length) return reply(`🔎 «${query}» bo'yicha mahsulot topilmadi.`);
+    const keyboard = results.map(product => [
+      telegramButton(`${product.name.slice(0, 34)} · ${fmtSum(product.price)}`, "🛒", {
+        callback_data: `shop:product:${product._id}`, style: "primary"
+      })
+    ]);
+    return reply(`🔎 «${query}» bo'yicha topilgan mahsulotlar:`, {
+      inline_keyboard: keyboard
+    });
+  }
+  return reply("Menyudan mahsulotlarni ko'rish, qidirish yoki yordam bo'limini tanlang.");
+}
 
 async function showTelegramSellerMenu(chatId, seller) {
   const keyboard = await defaultTelegramKeyboard(chatId, telegramSellerKeyboard);
@@ -820,7 +1070,7 @@ async function showTelegramPromos(chatId, messageId) {
   const replyMarkup = list.length ? {
     inline_keyboard: list.map(p => [
       telegramButton(`${p.active ? "O'chirish" : "Yoqish"} · ${p.code}`, "🔄", { callback_data: `promo:${p.code}:toggle` }),
-      telegramButton("O'chirish", "🗑", { callback_data: `promo:${p.code}:delete` })
+      telegramButton("O'chirish", "🗑", { callback_data: `promo:${p.code}:delete`, style: "danger" })
     ])
   } : telegramKeyboard;
   if (messageId) {
@@ -1095,6 +1345,10 @@ async function changeOrderStatus(id, status) {
 }
 
 async function handleTelegramCallback(callback) {
+  if (String(callback.data || "").startsWith("shop:")) {
+    await handleTelegramCustomerCallback(callback);
+    return;
+  }
   const [type, id, action] = String(callback.data || "").split(":");
   if (type === "sp" && (action === "page" || (/^\d+$/.test(id) && ["toggle", "edit", "stock", "image"].includes(action)))) {
     const chatId = String(callback.message?.chat?.id || "");
@@ -1396,13 +1650,7 @@ async function handleTelegramUpdate(update) {
       (sellerFlowPending && !adminMenuAction && !adminFlowPending)))
     return handleTelegramSellerMessage(message, linkedSeller, command, text);
   if (String(message.from?.id) !== TG_ADMIN_ID) {
-    if (text.startsWith("/"))
-      await tgCall("sendMessage", {
-        chat_id: message.chat.id,
-        text: "Bu buyruqdan foydalanishga ruxsat yo'q.",
-        reply_markup: { remove_keyboard: true }
-      });
-    return;
+    return handleTelegramCustomerMessage(message, command, text);
   }
   const chatId = String(message.chat.id);
   if (command) {
@@ -1471,7 +1719,7 @@ async function handleTelegramUpdate(update) {
       `📢 Ommaviy xabarni tasdiqlang.\nQabul qiluvchilar: ${recipientCount}\n\nSarlavha: ${title}\n\n${body}`,
       { inline_keyboard: [[
         telegramButton(`Yuborish (${recipientCount})`, "✅", { callback_data: "bc:confirm" }),
-        telegramButton("Bekor qilish", "↩️", { callback_data: "bc:cancel" })
+        telegramButton("Bekor qilish", "↩️", { callback_data: "bc:cancel", style: "danger" })
       ]] });
   }
   if (telegramMessageFlows.has(chatId) && !command) {
