@@ -615,7 +615,7 @@ async function showTelegramCustomerProducts(chatId, categoryId, page = 0, messag
       ).join("\n\n")
     : "🛍 Bu bo'limda hozircha mahsulot yo'q.";
   const keyboard = telegramButtonRows(list.map((product, index) => ({
-    ...telegramButton(String(currentPage * pageSize + index + 1), "🛒", { style: "primary" }),
+    text: String(currentPage * pageSize + index + 1),
     callback_data: `shop:product:${product._id}`
   })));
   if (currentPage > 0 || currentPage + 1 < pageCount) {
@@ -772,7 +772,7 @@ async function handleTelegramCustomerMessage(message, command, text) {
     }).sort({ sold: -1 }).limit(8).toArray();
     if (!results.length) return reply(`🔎 «${query}» bo'yicha mahsulot topilmadi.`);
     const keyboard = telegramButtonRows(results.map((product, index) => ({
-      ...telegramButton(String(index + 1), "🛒", { style: "primary" }),
+      text: String(index + 1),
       callback_data: `shop:product:${product._id}`
     })));
     return reply(`🔎 «${query}» bo'yicha topilgan mahsulotlar:\n\n${results.map((product, index) =>
