@@ -8,6 +8,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { OAuth2Client } = require("google-auth-library");
 const rateLimit = require("express-rate-limit");
+const { normalizeQuery } = require("./public/search.js");
 
 // ---- .env (lokal ishga tushirish uchun; hostingda Environment ishlatiladi) ----
 try {
@@ -205,7 +206,7 @@ const htmlEscape = value => String(value).replace(/[&<>"']/g, character => ({
 }[character]));
 const ah = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-let db, users, sellers, products, orders, counters, slides, promos, promoUses, messages, reviews, messageCampaigns;
+let db, users, sellers, products, orders, counters, slides, promos, promoUses, messages, reviews, messageCampaigns, searchQueries;
 
 const promoOut = p => ({
   code: p.code, type: p.type, value: p.value, active: !!p.active,
@@ -1980,6 +1981,8 @@ const sellerAuthLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, stand
   message: { error: "Juda ko'p urinish. Bir soatdan keyin qayta urinib ko'ring." } });
 const orderLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false,
   message: { error: "Juda ko'p buyurtma. Keyinroq urinib ko'ring." } });
+const searchQueryLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false,
+  message: { error: "Qidiruv so'rovlari limiti tugadi. Keyinroq urinib ko'ring." } });
 
 // ---- Ochiq API ----
 app.get("/api/health", (req, res) => res.json({ ok: true }));
@@ -2005,6 +2008,23 @@ app.get("/api/promos/:code", ah(async (req, res) => {
 }));
 app.get("/api/products", ah(async (req, res) =>
   res.json(await publicProductListOut(await products.find({ active: true }).sort({ sold: -1 }).toArray()))));
+app.post("/api/search/no-results", searchQueryLimiter, ah(async (req, res) => {
+  const query = typeof req.body?.query === "string" ? req.body.query.trim().slice(0, 100) : "";
+  const normalized = normalizeQuery(query);
+  if (!normalized) return res.status(400).json({ error: "Qidiruv so'rovini kiriting." });
+  const now = new Date();
+  const day = now.toISOString().slice(0, 10);
+  await searchQueries.updateOne(
+    { normalized, day },
+    {
+      $set: { query, lastSeen: now, expireAt: new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000) },
+      $setOnInsert: { firstSeen: now },
+      $inc: { count: 1 }
+    },
+    { upsert: true }
+  );
+  res.status(204).end();
+}));
 app.get("/api/products/:id/reviews", auth(false), ah(async (req, res) => {
   const productId = Number(req.params.id);
   if (!Number.isSafeInteger(productId)) return res.status(404).json({ error: "Mahsulot topilmadi." });
@@ -2750,6 +2770,7 @@ async function main() {
   slides = db.collection("slides"); promos = db.collection("promos"); promoUses = db.collection("promoUses");
   messages = db.collection("messages"); reviews = db.collection("reviews");
   messageCampaigns = db.collection("messageCampaigns");
+  searchQueries = db.collection("searchQueries");
   await users.createIndex({ phone: 1 }, { unique: true });
   await sellers.createIndex({ email: 1 }, { unique: true });
   await sellers.createIndex({ phone: 1 }, { unique: true });
@@ -2760,6 +2781,8 @@ async function main() {
   await orders.createIndex({ userId: 1, created: -1 });
   await orders.createIndex({ tgSent: 1, created: 1 });
   await products.createIndex({ active: 1, sold: -1 });
+  await searchQueries.createIndex({ normalized: 1, day: 1 }, { unique: true });
+  await searchQueries.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 });
   await slides.createIndex({ created: 1 });
   await promos.createIndex({ code: 1 }, { unique: true });
   await promoUses.createIndex({ code: 1, uses: -1 });

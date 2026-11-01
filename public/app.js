@@ -39,6 +39,8 @@ let leafletLoad = null;
 const byId = id => PRODUCTS.find(p => p.id === id);
 const hasDiscount = p => Number(p.old) > Number(p.price);
 const disc = p => hasDiscount(p) ? Math.round((1 - p.price / p.old) * 100) : 0;
+let productSearchIndex = XaridorSearch.createIndex(PRODUCTS);
+let productsLoaded = false;
 
 /* ---------- toast / overlay ---------- */
 let tt;
@@ -81,10 +83,10 @@ function renderStatic() {
 }
 
 function filtered() {
-  let list = PRODUCTS.filter(p => {
+  const searchResults = state.q ? XaridorSearch.search(productSearchIndex, state.q) : PRODUCTS;
+  let list = searchResults.filter(p => {
     if (state.cat && p.cat !== state.cat) return false;
     if (state.onlyFav && !state.favs.includes(p.id)) return false;
-    if (state.q && !(p.name + " " + p.desc).toLowerCase().includes(state.q.toLowerCase())) return false;
     if (state.min && p.price < state.min) return false;
     if (state.max && p.price > state.max) return false;
     return true;
@@ -93,7 +95,7 @@ function filtered() {
     pop: (a, b) => b.sold - a.sold, cheap: (a, b) => a.price - b.price, exp: (a, b) => b.price - a.price,
     rate: (a, b) => b.rating - a.rating, disc: (a, b) => disc(b) - disc(a)
   }[state.sort];
-  return list.sort(s);
+  return { list: state.q ? list : list.sort(s), searchResults };
 }
 
 function cardHTML(p) {
@@ -117,14 +119,16 @@ function cardHTML(p) {
 }
 
 function renderGrid() {
-  const list = filtered();
+  const { list, searchResults } = filtered();
   const c = CATEGORIES.find(c => c.id === state.cat);
   $("#title").textContent = state.onlyFav ? "Sevimlilar" : state.q ? `«${state.q}» bo'yicha natijalar` : c ? c.name : "Barcha mahsulotlar";
   const noProducts = !PRODUCTS.length;
   const hasFilters = !!(state.cat || state.q || state.onlyFav || state.min || state.max);
   $("#grid").setAttribute("aria-busy", "false");
   $("#grid").innerHTML = list.length ? list.map(cardHTML).join("") :
-    `<div class="empty">${ic(noProducts ? "package" : "search", 38)}<b>${noProducts ? "Hozircha mahsulotlar yo'q" : state.onlyFav ? "Sevimlilar ro'yxati bo'sh" : "Hech narsa topilmadi"}</b><span>${noProducts ? "Mahsulotlar qo'shilganda shu yerda ko'rinadi." : state.onlyFav ? "Yoqtirgan mahsulotlaringizni yurakcha orqali saqlang." : "Qidiruv so'zini yoki filtrlarni o'zgartirib ko'ring."}</span>${hasFilters ? `<button class="btn line" data-clear-filters>Filtrlarni tozalash</button>` : ""}</div>`;
+    state.q && searchResults.length === 0 && PRODUCTS.length
+      ? `<div class="empty search-empty-state">${ic("search", 38)}<b>«${esc(state.q)}» bo'yicha mahsulot topilmadi</b><span>Qidiruv so'zini o'zgartiring yoki mashhur mahsulotlarni ko'ring.</span><div class="search-recommendations">${PRODUCTS.slice().sort((a, b) => b.sold - a.sold || b.rating - a.rating || Number(b.stock > 0) - Number(a.stock > 0)).slice(0, 4).map(cardHTML).join("")}</div></div>`
+      : `<div class="empty">${ic(noProducts ? "package" : "search", 38)}<b>${noProducts ? "Hozircha mahsulotlar yo'q" : state.onlyFav ? "Sevimlilar ro'yxati bo'sh" : "Hech narsa topilmadi"}</b><span>${noProducts ? "Mahsulotlar qo'shilganda shu yerda ko'rinadi." : state.onlyFav ? "Yoqtirgan mahsulotlaringizni yurakcha orqali saqlang." : "Qidiruv so'zini yoki filtrlarni o'zgartirib ko'ring."}</span>${hasFilters ? `<button class="btn line" data-clear-filters>Filtrlarni tozalash</button>` : ""}</div>`;
   document.querySelectorAll("#chips .chip").forEach(button => {
     button.classList.toggle("on", (button.dataset.cat || null) === state.cat && !state.onlyFav);
   });
@@ -703,7 +707,17 @@ function setCat(c) {
   }
   scrollTo({ top: 0, behavior: "smooth" });
 }
-function doSearch(q) { state.q = q.trim(); state.cat = null; state.onlyFav = false; $("#suggest").hidden = true; renderGrid(); }
+function doSearch(q) {
+  state.q = q.trim();
+  state.cat = null;
+  state.onlyFav = false;
+  $("#suggest").hidden = true;
+  renderGrid();
+  if (state.q && productsLoaded && !XaridorSearch.search(productSearchIndex, state.q).length) {
+    api("/search/no-results", { method: "POST", body: { query: state.q } })
+      .catch(error => console.error("Natijasiz qidiruvni qayd etib bo'lmadi:", error));
+  }
+}
 
 /* ---------- events ---------- */
 document.addEventListener("click", e => {
@@ -753,12 +767,18 @@ $("#messagesBtn").onclick = openMessages;
 $("#favBtn").onclick = () => { state.onlyFav = true; state.cat = null; state.q = ""; renderGrid(); scrollTo({ top: 0, behavior: "smooth" }); };
 $("#qBtn").onclick = () => doSearch($("#q").value);
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") doSearch(e.target.value); });
+let suggestTimer;
 $("#q").addEventListener("input", e => {
-  const v = e.target.value.trim().toLowerCase(), s = $("#suggest");
-  if (!v) { s.hidden = true; return; }
-  const m = PRODUCTS.filter(p => p.name.toLowerCase().includes(v)).slice(0, 6);
-  s.innerHTML = m.length ? m.map(p => `<button data-open="${p.id}">${p.image ? `<img class="search-thumb" src="${esc(p.image)}" alt="" loading="lazy">` : `<span class="search-icon">${ic(p.icon, 20)}</span>`}<span class="search-result"><b>${esc(p.name)}</b><small>${fmt(p.price)}</small></span></button>`).join("") : `<div class="search-empty">${ic("search", 18)} Hech narsa topilmadi</div>`;
-  s.hidden = false;
+  const value = e.target.value.trim(), suggest = $("#suggest");
+  clearTimeout(suggestTimer);
+  if (!XaridorSearch.normalizeQuery(value)) { suggest.hidden = true; return; }
+  suggestTimer = setTimeout(() => {
+    const matches = XaridorSearch.search(productSearchIndex, value, 6);
+    suggest.innerHTML = matches.length
+      ? matches.map(product => `<button data-open="${product.id}">${product.image ? `<img class="search-thumb" src="${esc(product.image)}" alt="" loading="lazy">` : `<span class="search-icon">${ic(product.icon, 20)}</span>`}<span class="search-result"><b>${esc(product.name)}</b><small>${fmt(product.price)}</small></span></button>`).join("")
+      : `<div class="search-empty">${ic("search", 18)} Mos mahsulot topilmadi</div>`;
+    suggest.hidden = false;
+  }, 80);
 });
 $("#sort").onchange = e => { state.sort = e.target.value; renderGrid(); };
 $("#pmin").oninput = e => { state.min = +e.target.value || 0; renderGrid(); };
@@ -769,6 +789,8 @@ async function loadProducts() {
   if (!PRODUCTS.length) renderLoading();
   try {
     PRODUCTS = await api("/products");
+    productSearchIndex = XaridorSearch.createIndex(PRODUCTS);
+    productsLoaded = true;
     for (const id of Object.keys(state.cart)) if (!byId(+id)) delete state.cart[id];
     persist();
   } catch { toast("Server bilan aloqa yo'q"); }

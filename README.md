@@ -54,6 +54,11 @@ Google akkaunt emailni o'zi tekshiradi; sayt Google parolini so'ramaydi va tasdi
 - Foydalanuvchi parolni unutsa, saytdagi support tugmasi orqali [@habibullayev_28](https://t.me/habibullayev_28) ga murojaat qiladi. Botda foydalanuvchini topgach, admin vaqtinchalik parol berishi mumkin; asl parol ko'rinmaydi va user vaqtinchalik parol bilan kirgach yangisini o'rnatishi shart.
 - Bot qidiruviga ruxsat berilgan adminning shaxsiy Telegram akkaunt ID sini `TG_ADMIN_ID` ga kiriting. Guruhda sotuvchi arizasi tugmalarini bosish uchun ham shu ID ishlatiladi.
 
+## 5. Sayt qidiruvi
+- Mahsulot qidiruvi lotin/kirill yozuvlarini, o'zbek apostroflarini, sinonimlarni va kichik imlo xatolarini birga hisobga oladi. Qidiruv brauzerda indekslangan faol mahsulotlar ustida ishlaydi; yangi tashqi qidiruv servisi talab qilinmaydi.
+- Sinonimlarni `public/search-synonyms.js` faylidagi guruhlarga qo'shib tahrirlang. Natija bo'lmasa ommabop mahsulotlar ko'rsatiladi; so'rov kunlik hisoblagich bilan MongoDB `searchQueries` to'plamiga yoziladi va 90 kundan keyin avtomatik tozalanadi.
+- Qidiruv testlari: `npm test`.
+
 ## 5. Moslash
 - Sotuvchilar `/seller.html` sahifasida Google orqali kiradi; yangi sotuvchi do'kon ma'lumotlarini to'ldirib ariza yuboradi. Google emailni tasdiqlaydi, admin panel yoki Telegramdagi inline tugma orqali admin arizani faollashtiradi. Tasdiqlangach sotuvchi kabinetidagi Telegram ulash havolasini ochib botda **Start** bosadi; parol so'ralmaydi. Ulangan Telegram akkauntiga o'z mahsulotlarining buyurtmalari boradi.
 - Banner slaydlari admin panelning **Slaydlar** bo'limida boshqariladi; JPG, PNG yoki WebP (5 MB gacha) yuklash mumkin.
