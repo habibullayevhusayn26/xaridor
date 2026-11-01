@@ -101,6 +101,18 @@ const TELEGRAM_PREMIUM_EMOJIS = new Map([
   ["😐", "5395456106145295699"]
 ]);
 const TELEGRAM_EMOJI_USES = new Map();
+function telegramButton(text, emoji, properties = {}) {
+  const emojiIds = TELEGRAM_PREMIUM_EMOJIS.get(emoji);
+  if (!emojiIds) throw new Error(`Telegram premium emoji topilmadi: ${emoji}`);
+  const options = Array.isArray(emojiIds) ? emojiIds : [emojiIds];
+  const use = TELEGRAM_EMOJI_USES.get(emoji) || 0;
+  TELEGRAM_EMOJI_USES.set(emoji, use + 1);
+  return {
+    text,
+    ...properties,
+    icon_custom_emoji_id: options[use % options.length]
+  };
+}
 const TELEGRAM_EMOJI_PATTERN = new RegExp(
   `(?:${[...TELEGRAM_PREMIUM_EMOJIS.keys()].sort((a, b) => b.length - a.length).join("|")}|` +
   "(?:\\p{Regional_Indicator}{2}|\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E)?(?:\\p{Emoji_Modifier})?(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E)?(?:\\p{Emoji_Modifier})?)*|\\d\\uFE0F?\\u20E3))",
@@ -432,8 +444,8 @@ async function notifySellerApplication(seller) {
       text: `👤 Yangi sotuvchi arizasi\nDo'kon: ${seller.storeName}\nIsm: ${seller.name}\nEmail: ${seller.email}\nTelefon: ${seller.phone}\nManzil: ${seller.address}`,
       reply_markup: {
         inline_keyboard: [[
-          { text: "Tasdiqlash", callback_data: `seller:${seller._id}:approve` },
-          { text: "Rad etish", callback_data: `seller:${seller._id}:reject` }
+          telegramButton("Tasdiqlash", "✅", { callback_data: `seller:${seller._id}:approve` }),
+          telegramButton("Rad etish", "⚠️", { callback_data: `seller:${seller._id}:reject` })
         ]]
       }
     });
@@ -485,19 +497,19 @@ const telegramBroadcastDrafts = new Map();
 const telegramSellerFlows = new Map();
 const telegramKeyboard = {
   keyboard: [
-    [{ text: TELEGRAM_USER_BUTTON }, { text: TELEGRAM_ORDER_BUTTON }],
-    [{ text: TELEGRAM_PROMOS_BUTTON }, { text: TELEGRAM_ADD_PROMO_BUTTON }],
-    [{ text: TELEGRAM_REPORT_BUTTON }, { text: TELEGRAM_MESSAGE_STATS_BUTTON }],
-    [{ text: TELEGRAM_BROADCAST_BUTTON }]
+    [telegramButton(TELEGRAM_USER_BUTTON, "🔎"), telegramButton(TELEGRAM_ORDER_BUTTON, "🛒")],
+    [telegramButton(TELEGRAM_PROMOS_BUTTON, "🎁"), telegramButton(TELEGRAM_ADD_PROMO_BUTTON, "🔗")],
+    [telegramButton(TELEGRAM_REPORT_BUTTON, "📊"), telegramButton(TELEGRAM_MESSAGE_STATS_BUTTON, "💬")],
+    [telegramButton(TELEGRAM_BROADCAST_BUTTON, "📢")]
   ],
   resize_keyboard: true,
   is_persistent: true
 };
 const telegramSellerKeyboard = {
   keyboard: [
-    [{ text: TELEGRAM_SELLER_PRODUCTS_BUTTON }],
-    [{ text: TELEGRAM_SELLER_PRODUCT_SEARCH_BUTTON }, { text: TELEGRAM_SELLER_ORDER_SEARCH_BUTTON }],
-    [{ text: TELEGRAM_SELLER_HOME_BUTTON }]
+    [telegramButton(TELEGRAM_SELLER_PRODUCTS_BUTTON, "🛒")],
+    [telegramButton(TELEGRAM_SELLER_PRODUCT_SEARCH_BUTTON, "🔎"), telegramButton(TELEGRAM_SELLER_ORDER_SEARCH_BUTTON, "🛒")],
+    [telegramButton(TELEGRAM_SELLER_HOME_BUTTON, "↩️")]
   ],
   resize_keyboard: true,
   is_persistent: true
@@ -548,14 +560,14 @@ async function showTelegramSellerProducts(chatId, seller, messageId = null, page
     ).join("\n\n")
     : `${seller.storeName} do'konida hali mahsulot yo'q.`;
   const keyboard = list.map(product => [
-      { text: product.active ? "Yashirish" : "Faollashtirish", callback_data: `sp:${product._id}:toggle` },
-      { text: "Tahrirlash", callback_data: `sp:${product._id}:edit` },
-      { text: "Ombor", callback_data: `sp:${product._id}:stock` }
+      telegramButton(product.active ? "Yashirish" : "Faollashtirish", "🔄", { callback_data: `sp:${product._id}:toggle` }),
+      telegramButton("Tahrirlash", "📜", { callback_data: `sp:${product._id}:edit` }),
+      telegramButton("Ombor", "🏧", { callback_data: `sp:${product._id}:stock` })
     ]);
   if (page > 0 || page + 1 < pageCount)
     keyboard.push([
-      ...(page > 0 ? [{ text: "Oldingi", callback_data: `sp:${page - 1}:page` }] : []),
-      ...(page + 1 < pageCount ? [{ text: "Keyingi", callback_data: `sp:${page + 1}:page` }] : [])
+      ...(page > 0 ? [telegramButton("Oldingi", "⬅️", { callback_data: `sp:${page - 1}:page` })] : []),
+      ...(page + 1 < pageCount ? [telegramButton("Keyingi", "➡️", { callback_data: `sp:${page + 1}:page` })] : [])
     ]);
   const replyMarkup = list.length
     ? { inline_keyboard: keyboard }
@@ -571,10 +583,10 @@ async function showTelegramSellerProduct(chatId, seller, product, messageId = nu
   const category = CATEGORIES.find(item => item.id === product.cat)?.name || product.cat;
   const text = `🛒 Mahsulot: ${product.name}\nID: ${product._id}\nHolat: ${product.active ? "Faol" : "Yashirin"}\nKategoriya: ${category}\nNarx: ${fmtSum(product.price)}\nEski narx: ${fmtSum(product.old)}\nOmbor: ${product.stock}\nRasm: ${product.image ? "Mavjud" : "Yo'q"}\n\nIzoh:\n${product.descr || "Kiritilmagan"}`;
   const replyMarkup = { inline_keyboard: [
-    [{ text: product.active ? "Yashirish" : "Faollashtirish", callback_data: `sp:${product._id}:toggle` }],
-    [{ text: "Barcha ma'lumotni tahrirlash", callback_data: `sp:${product._id}:edit` }],
-    [{ text: "Rasmni almashtirish", callback_data: `sp:${product._id}:image` }],
-    [{ text: "Omborni o'zgartirish", callback_data: `sp:${product._id}:stock` }]
+    [telegramButton(product.active ? "Yashirish" : "Faollashtirish", "🔄", { callback_data: `sp:${product._id}:toggle` })],
+    [telegramButton("Barcha ma'lumotni tahrirlash", "📜", { callback_data: `sp:${product._id}:edit` })],
+    [telegramButton("Rasmni almashtirish", "🔎", { callback_data: `sp:${product._id}:image` })],
+    [telegramButton("Omborni o'zgartirish", "🏧", { callback_data: `sp:${product._id}:stock` })]
   ] };
   if (messageId) {
     await tgCall("editMessageText", { chat_id: chatId, message_id: messageId, text, reply_markup });
@@ -616,7 +628,7 @@ function sellerOrderDetails(seller, result) {
     text: `🛒 Buyurtma ${order._id}\nDo'kon: ${seller.storeName}\nUmumiy holati: ${order.status}\n\nMijoz: ${order.name}\nTelefon: ${order.phone}\nManzil: ${order.city}, ${order.addr}${orderMapLink(order)}\nTo'lov: ${order.pay}\n\nSizning mahsulotlaringiz:\n${itemText}\n\nEslatma: status o'zgarsa butun buyurtmaga ta'sir qiladi.`,
     replyMarkup: {
       inline_keyboard: STATUSES.map((status, index) => [{
-        text: status,
+        ...telegramButton(status, order.status === status ? "✅" : "⏳"),
         callback_data: `so:${order._id}:${index}`
       }])
     }
@@ -728,9 +740,9 @@ async function showTelegramReport(chatId, period) {
 async function showTelegramReportMenu(chatId) {
   await telegramSend(chatId, "📊 Hisobot davrini tanlang:", {
     inline_keyboard: [[
-      { text: "Bugun", callback_data: "report:today" },
-      { text: "Hafta", callback_data: "report:week" },
-      { text: "Oy", callback_data: "report:month" }
+      telegramButton("Bugun", "1️⃣", { callback_data: "report:today" }),
+      telegramButton("Hafta", "2️⃣", { callback_data: "report:week" }),
+      telegramButton("Oy", "3️⃣", { callback_data: "report:month" })
     ]]
   });
 }
@@ -807,8 +819,8 @@ async function showTelegramPromos(chatId, messageId) {
     : "Promokodlar yo'q. Yangi kod qo'shish uchun /addpromo yuboring.";
   const replyMarkup = list.length ? {
     inline_keyboard: list.map(p => [
-      { text: `${p.active ? "O'chirish" : "Yoqish"} · ${p.code}`, callback_data: `promo:${p.code}:toggle` },
-      { text: "O'chirish", callback_data: `promo:${p.code}:delete` }
+      telegramButton(`${p.active ? "O'chirish" : "Yoqish"} · ${p.code}`, "🔄", { callback_data: `promo:${p.code}:toggle` }),
+      telegramButton("O'chirish", "🗑", { callback_data: `promo:${p.code}:delete` })
     ])
   } : telegramKeyboard;
   if (messageId) {
@@ -843,10 +855,10 @@ async function findTelegramUser(query) {
     text: `👤 Foydalanuvchi ma'lumotlari\nID: ${user.userCode}\nIsm: ${user.name}\nTelefon: ${user.phone}\nRol: ${user.role}\nRo'yxatdan o'tgan: ${user.created ? new Date(user.created).toLocaleString("uz-UZ") : "Noma'lum"}\nSaytdagi holati: ${user.blockedAt ? "Bloklangan" : "Faol"}\nJami buyurtmalar: ${totalOrders}\n\nBuyurtmalar:\n${orderInfo}${moreOrders}`,
     replyMarkup: {
       inline_keyboard: [
-        [{ text: "Xabar yuborish", callback_data: `usr:${user.userCode}:message` }],
-        [{ text: "Vaqtinchalik parol berish", callback_data: `usr:${user.userCode}:reset` }],
-        [{ text: user.blockedAt ? "Blokdan chiqarish" : "Saytdan bloklash",
-          callback_data: `usr:${user.userCode}:${user.blockedAt ? "unblock" : "block"}` }]
+        [telegramButton("Xabar yuborish", "💬", { callback_data: `usr:${user.userCode}:message` })],
+        [telegramButton("Vaqtinchalik parol berish", "🆔", { callback_data: `usr:${user.userCode}:reset` })],
+        [telegramButton(user.blockedAt ? "Blokdan chiqarish" : "Saytdan bloklash", user.blockedAt ? "✅" : "⚠️",
+          { callback_data: `usr:${user.userCode}:${user.blockedAt ? "unblock" : "block"}` })]
       ]
     }
   };
@@ -872,7 +884,7 @@ async function findTelegramOrder(query) {
     text: `${header}${items}\n\nJami: ${fmtSum(order.total)}`,
     replyMarkup: {
       inline_keyboard: STATUSES.map((status, index) => [{
-        text: status,
+        ...telegramButton(status, order.status === status ? "✅" : "⏳"),
         callback_data: `ord:${order._id}:${index}`
       }])
     }
@@ -1458,8 +1470,8 @@ async function handleTelegramUpdate(update) {
     return telegramSend(chatId,
       `📢 Ommaviy xabarni tasdiqlang.\nQabul qiluvchilar: ${recipientCount}\n\nSarlavha: ${title}\n\n${body}`,
       { inline_keyboard: [[
-        { text: `Yuborish (${recipientCount})`, callback_data: "bc:confirm" },
-        { text: "Bekor qilish", callback_data: "bc:cancel" }
+        telegramButton(`Yuborish (${recipientCount})`, "✅", { callback_data: "bc:confirm" }),
+        telegramButton("Bekor qilish", "↩️", { callback_data: "bc:cancel" })
       ]] });
   }
   if (telegramMessageFlows.has(chatId) && !command) {
