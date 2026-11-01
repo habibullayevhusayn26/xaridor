@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "search:backfill": "node scripts/backfill-product-embeddings.js",
     "test": "node --test"
   },
   "engines": {

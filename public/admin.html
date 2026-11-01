@@ -433,6 +433,7 @@ function productForm(p = {}) {
       <img class="image-preview" id="imagePreview" src="${p.image ? esc(p.image) : ""}" alt="Mahsulot rasmi ko'rinishi" ${p.image ? "" : "hidden"}>
       ${p.image ? `<label style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" name="removeImage"> Rasmni olib tashlash</label>` : ""}
       <label>Tavsif<textarea name="desc" rows="3">${v("desc")}</textarea></label>
+      <label>Teglar (vergul bilan ajrating)<input name="tags" maxlength="800" value="${v("tags", Array.isArray(p.tags) ? p.tags.join(", ") : "")}" placeholder="naushnik, bluetooth, simsiz"></label>
       <label style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" name="active" ${p.active === false ? "" : "checked"}> Saytda ko'rsatilsin</label>
       <div class="err" id="pe"></div><button class="btn sun block" type="submit">Saqlash</button></form>`;
   $("#modal").hidden = false;

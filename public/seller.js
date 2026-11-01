@@ -201,6 +201,7 @@ function renderDashboard(seller) {
         <label>Mahsulot rasmi (JPG, PNG yoki WebP, 5 MB gacha)<input name="imageFile" type="file" accept="image/jpeg,image/png,image/webp"></label>
         <img class="image-preview" id="sellerImagePreview" alt="Rasm ko'rinishi" hidden>
         <label>Tavsif<textarea name="desc" maxlength="1000" rows="4"></textarea></label>
+        <label>Teglar (vergul bilan ajrating)<input name="tags" maxlength="800" placeholder="naushnik, bluetooth, simsiz"></label>
         <div class="err" id="sellerProductError"></div>
         <div class="seller-form-actions"><button class="btn sun" type="submit" ${seller.telegramLinked ? "" : "disabled"}>Mahsulotni saqlash</button><button class="btn line" id="sellerCancelEdit" type="button" hidden>Bekor qilish</button></div>
       </form>
@@ -348,7 +349,9 @@ function editProduct(product) {
   if (!product) return;
   currentProduct = product;
   const form = $("#sellerProductForm");
-  for (const key of ["name", "cat", "price", "old", "stock", "desc"]) form.elements[key].value = product[key] ?? "";
+  for (const key of ["name", "cat", "price", "old", "stock", "desc"])
+    form.elements[key].value = product[key] ?? "";
+  form.elements.tags.value = Array.isArray(product.tags) ? product.tags.join(", ") : "";
   const preview = $("#sellerImagePreview");
   preview.src = product.image || "";
   preview.hidden = !product.image;

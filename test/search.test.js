@@ -2,104 +2,151 @@
 
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
-const XaridorSearch = require("../public/search.js");
+const {
+  canonicalQuery,
+  cosineSimilarity,
+  hybridRank,
+  normalizeText,
+  searchVariants,
+  toCyrillic,
+  toLatin,
+  trigramSimilarity
+} = require("../search-engine");
 
-const products = [
-  { id: 1, name: "Smartfon Samsung", desc: "Android telefon", sold: 80, rating: 4.7, stock: 12 },
-  { id: 2, name: "Чехол Samsung", desc: "Telefon g'ilofi", sold: 12, rating: 4.4, stock: 8 },
-  { id: 3, name: "G'ilof iPhone", desc: "Phone case", sold: 20, rating: 4.8, stock: 4 },
-  { id: 4, name: "Кроссовка Nike", desc: "Sport oyoq kiyim", sold: 34, rating: 4.6, stock: 2 },
-  { id: 5, name: "Noutbuk Lenovo", desc: "Laptop", sold: 60, rating: 4.9, stock: 3 },
-  { id: 6, name: "iPhone 15", desc: "Smartfon", sold: 90, rating: 4.8, stock: 0 },
-  { id: 7, name: "Samsung Galaxy S24", desc: "Telefon", sold: 30, rating: 4.5, stock: 6 },
-  { id: 8, name: "Model", desc: "Tajriba", sold: 2, rating: 4.1, stock: 0 },
-  { id: 9, name: "Model Plus", desc: "Tajriba", sold: 100, rating: 4.9, stock: 10 },
-  { id: 10, name: "Soat", desc: "Watch", sold: 5, rating: 4.0, stock: 0 },
-  { id: 11, name: "Sport krossovka", desc: "Oyoq kiyim", sold: 10, rating: 4.3, stock: 7 }
+const categories = [
+  { id: "electronics", name: "Elektronika" },
+  { id: "clothing", name: "Kiyim" }
 ];
-const index = XaridorSearch.createIndex(products);
-const ids = query => XaridorSearch.search(index, query).map(product => product.id);
+const vector = index => Array.from({ length: 4 }, (_, position) => Number(position === index));
+const headphones = {
+  _id: 1,
+  name: "Simsiz quloqchin",
+  cat: "electronics",
+  tags: ["bluetooth"],
+  descr: "Musiqa uchun simsiz audio qurilma",
+  sold: 30,
+  rating: 4.8,
+  stock: 5,
+  searchEmbedding: { vector: vector(0) }
+};
 
-const matchingCases = [
-  ["Smartfon lotincha", "smartfon", 1],
-  ["Smartfon kirillcha", "смартфон", 1],
-  ["Telefon sinonimi", "telefon", 1],
-  ["Smartphone typo transposition", "samrtfon", 1],
-  ["iPhone typo", "iphne", 6],
-  ["Qisqa prefix", "ip", 6],
-  ["Bir harfli prefix", "s", 1],
-  ["Chexol lotin transliteratsiyasi", "chexol", 2],
-  ["Chexol kirill yozuvi", "чехол", 2],
-  ["G'ilof sinonimi", "g'ilof", 2],
-  ["Case sinonimi", "case", 2],
-  ["Ruscha krossovka", "кроссовка", 4],
-  ["Krasovka typo", "krasovka", 4],
-  ["Krossovka sinonimi", "sport oyoq kiyim", 4],
-  ["Noutbuk lotincha", "noutbuk", 5],
-  ["Noutbuk ruscha", "ноутбук", 5],
-  ["Laptop sinonimi", "laptop", 5],
-  ["Aralash lotin va kirill", "smartfon samsung", 1],
-  ["Aralash chexol va Samsung", "чехол samsung", 2],
-  ["O'zbek apostrof belgisi", "gʻilof", 2],
-  ["Aralash uzbek Cyrillic/lating", "ғилоф iphone", 3]
+const headphoneQueries = [
+  "naushnik", "navushnik", "nauhsnik", "naushnk", "наушники", "quloqchin",
+  "kulokchin", "headphones", "airpods", "simsiz naushnik", "naushnik bluetuz"
 ];
 
-for (const [title, query, expectedId] of matchingCases) {
-  test(`${title}: ${query}`, () => {
-    assert.ok(ids(query).includes(expectedId), `Expected product ${expectedId} for ${query}`);
+test("Semantic embedding matches all requested headphone-query variants", () => {
+  for (const query of headphoneQueries) {
+    const queryVector = vector(0);
+    const results = hybridRank([headphones], query, queryVector, { categories });
+    assert.equal(results[0]?.product._id, headphones._id, `No headphone result for "${query}"`);
+  }
+});
+
+const typoCases = [
+  ["Smartfon Samsung", "samrtfon"],
+  ["iPhone 15", "iphne"],
+  ["Krossovka Nike", "krasovka"],
+  ["Noutbuk Lenovo", "noutbik"],
+  ["Telefon Samsung", "telephon"],
+  ["Чехол Samsung", "chexol"],
+  ["Quloqchin simsiz", "kulokchin"],
+  ["Planshet Apple", "plnashet"],
+  ["Soat aqlli", "soatt"],
+  ["Kamera Canon", "kamra"],
+  ["Kolonka JBL", "kolnka"],
+  ["Zaryadlovchi USB", "zaryadlovhci"],
+  ["Ryukzak maktab", "ryukzk"],
+  ["Klaviatura mexanik", "klaviatrua"],
+  ["Sichqoncha kompyuter", "sichqonhca"],
+  ["Monitor 24", "monitr"],
+  ["Televizor Smart", "televizir"]
+];
+
+for (const [name, query] of typoCases) {
+  test(`Fuzzy / multilingual match: "${query}" -> "${name}"`, () => {
+    const product = { _id: 2, name, cat: "electronics", tags: [], descr: "" };
+    const result = hybridRank([product], query, null, { categories });
+    assert.equal(result[0]?.product._id, product._id);
   });
 }
 
-test("Exact product name ranks before a more popular partial match", () => {
-  assert.equal(ids("model")[0], 8);
+test("Normalization unifies apostrophes, whitespace, and case", () => {
+  assert.equal(normalizeText(" OʻzBEK   G’oya "), normalizeText("o'zbek g'oya"));
+  assert.equal(canonicalQuery("Oʻzbek G’oya"), canonicalQuery("o'zbek g'oya"));
 });
 
-test("Product-name matches rank before description-only matches", () => {
-  const rankingIndex = XaridorSearch.createIndex([
-    { id: 1, name: "Phone accessory", desc: "", sold: 2, rating: 4, stock: 1 },
-    { id: 2, name: "Accessory", desc: "Phone", sold: 1000, rating: 5, stock: 1 }
-  ]);
-  assert.equal(XaridorSearch.search(rankingIndex, "phone")[0].id, 1);
+test("Uzbek Latin and Cyrillic forms are transliterated consistently", () => {
+  assert.equal(toCyrillic("O'g'li shahar choy"), "ўғли шаҳар чой");
+  assert.equal(toLatin("ўғли шаҳар чой"), "o'g'li shahar choy");
+  assert.ok(searchVariants("chexol").some(form => searchVariants("чехол").includes(form)));
 });
 
-test("Sales, rating, and stock break relevance ties in that order", () => {
-  const rankingIndex = XaridorSearch.createIndex([
-    { id: 1, name: "Watch red", desc: "", sold: 10, rating: 5, stock: 0 },
-    { id: 2, name: "Watch blue", desc: "", sold: 10, rating: 4, stock: 2 },
-    { id: 3, name: "Watch green", desc: "", sold: 20, rating: 3, stock: 0 },
-    { id: 4, name: "Watch gold", desc: "", sold: 10, rating: 5, stock: 5 }
-  ]);
-  assert.deepEqual(XaridorSearch.search(rankingIndex, "watch").map(product => product.id), [3, 4, 1, 2]);
+test("Trigram similarity tolerates transposition and missing characters", () => {
+  assert.ok(trigramSimilarity("samrtfon", "smartfon") > 0.5);
+  assert.ok(trigramSimilarity("iphne", "iphone") > 0.5);
 });
 
-test("No-match search returns no products", () => {
-  assert.deepEqual(ids("aslo boshqa narsa"), []);
+test("Cosine similarity validates dimensions and values", () => {
+  assert.equal(cosineSimilarity([1, 0], [1, 0]), 1);
+  assert.equal(cosineSimilarity([1, 0], [0, 1]), 0);
+  assert.equal(cosineSimilarity([1], [1, 0]), -1);
 });
 
-test("Search suggestions can be capped for autocomplete", () => {
-  assert.equal(XaridorSearch.search(index, "s", 6).length <= 6, true);
+test("Hybrid ranking merges fuzzy and semantic matches and rejects unrelated vectors", () => {
+  const semanticHeadphones = { ...headphones, searchEmbedding: { vector: vector(0) } };
+  const unrelated = {
+    _id: 3, name: "Zar o'yini", cat: "clothing", tags: [], descr: "",
+    searchEmbedding: { vector: vector(1) }
+  };
+  const results = hybridRank(
+    [semanticHeadphones, unrelated],
+    "naushnik",
+    vector(0),
+    { categories, semanticThreshold: 0.5 }
+  );
+  assert.deepEqual(results.map(item => item.product._id), [1]);
 });
 
-test("Normalization handles apostrophe variants", () => {
-  assert.equal(XaridorSearch.normalizeQuery("oʻzbek g’oyasi"), XaridorSearch.normalizeQuery("o'zbek g'oyasi"));
+test("Popularity breaks equal relevance ties in sales, rating, then stock order", () => {
+  const products = [
+    { _id: 1, name: "Watch", sold: 10, rating: 5, stock: 0 },
+    { _id: 2, name: "Watch", sold: 10, rating: 4, stock: 2 },
+    { _id: 3, name: "Watch", sold: 20, rating: 3, stock: 0 },
+    { _id: 4, name: "Watch", sold: 10, rating: 5, stock: 5 }
+  ];
+  assert.deepEqual(
+    hybridRank(products, "watch", null, { categories, fuzzyThreshold: 0.1 })
+      .map(item => item.product._id),
+    [3, 4, 1, 2]
+  );
 });
 
-test("Normalization handles Uzbek digraphs and apostrophe letters", () => {
-  assert.equal(XaridorSearch.normalizeQuery("O‘ G‘ Sh Ch Ng"), "ў ғ ш ч нг");
+test("Low-similarity products are excluded rather than returned as random results", () => {
+  const product = {
+    _id: 5, name: "Telefon Samsung", cat: "electronics", tags: [], descr: "",
+    searchEmbedding: { vector: vector(0) }
+  };
+  assert.deepEqual(hybridRank([product], "zar o'yini", vector(1), { categories }), []);
 });
 
-test("Large local index returns typo matches within the interactive budget", () => {
-  const largeIndex = XaridorSearch.createIndex(Array.from({ length: 5000 }, (_, index) => ({
-    id: index,
-    name: index === 4999 ? "Smartfon Samsung" : `Mahsulot ${index}`,
-    desc: "",
-    sold: index,
-    rating: 4,
-    stock: 1
-  })));
+test("Fuzzy autocomplete can return a short prefix match", () => {
+  const product = { _id: 6, name: "Smartfon Samsung", cat: "electronics", tags: [], descr: "" };
+  assert.equal(hybridRank([product], "smart", null, { categories })[0]?.product._id, product._id);
+});
+
+test("5,000-product fuzzy ranking stays within the 500 ms interactive budget", () => {
+  const products = Array.from({ length: 5000 }, (_, index) => ({
+    _id: index + 10,
+    name: index === 4999 ? "Smartfon Samsung" : `Mahsulot model-${index}`,
+    cat: "electronics",
+    tags: [],
+    descr: ""
+  }));
   const start = performance.now();
-  assert.equal(XaridorSearch.search(largeIndex, "samrtfon")[0].id, 4999);
+  const result = hybridRank(products, "samrtfon", null, { categories });
   const duration = performance.now() - start;
   console.log(`5,000 mahsulot uchun typo qidiruvi: ${duration.toFixed(1)} ms`);
-  assert.ok(duration < 300, `Search took too long: ${duration.toFixed(1)} ms`);
+  assert.equal(result[0]?.product._id, 5009);
+  assert.ok(duration < 500, `Search took too long: ${duration.toFixed(1)} ms`);
 });

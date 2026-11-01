@@ -25,6 +25,21 @@ async function api(url, opts = {}) {
   if (!r.ok) { const e = new Error(data.error || "Xatolik yuz berdi."); e.status = r.status; throw e; }
   return data;
 }
+async function sellerApi(url) {
+  const token = localStorage.getItem("bz_seller_token");
+  if (!token) throw new Error("Sotuvchi sessiyasi topilmadi.");
+  const response = await fetch("/api/seller" + url, {
+    headers: { Authorization: "Bearer " + token }
+  });
+  let data = {};
+  try { data = await response.json(); } catch {}
+  if (!response.ok) {
+    const error = new Error(data.error || "Sotuvchi ma'lumotini yuklab bo'lmadi.");
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
 function logout() { state.user = null; state.unreadMessages = 0; store.set("user", null); store.set("token", null); updateBadges(); }
 
 const FREE_SHIP = 200000, SHIP = 15000;
@@ -32,15 +47,17 @@ const ORDER_STATUSES = ["Qabul qilindi", "Yig'ilmoqda", "Yo'lda", "Yetkazildi"];
 const state = {
   cart: store.get("cart", {}), favs: store.get("favs", []),
   user: store.get("user", null), promo: store.get("promo", ""), promoInfo: null,
-  unreadMessages: 0, cat: null, q: "", onlyFav: false, min: 0, max: 0, sort: "pop"
+  seller: null, unreadMessages: 0, cat: null, q: "", searchResults: [], searchCorrectedQuery: null,
+  searchSuggestions: [], searchLoading: false, searchError: null,
+  onlyFav: false, min: 0, max: 0, sort: "pop"
 };
 let checkoutMap = null;
 let leafletLoad = null;
 const byId = id => PRODUCTS.find(p => p.id === id);
 const hasDiscount = p => Number(p.old) > Number(p.price);
 const disc = p => hasDiscount(p) ? Math.round((1 - p.price / p.old) * 100) : 0;
-let productSearchIndex = XaridorSearch.createIndex(PRODUCTS);
-let productsLoaded = false;
+let searchRequestId = 0;
+let suggestionRequestId = 0;
 
 /* ---------- toast / overlay ---------- */
 let tt;
@@ -83,7 +100,7 @@ function renderStatic() {
 }
 
 function filtered() {
-  const searchResults = state.q ? XaridorSearch.search(productSearchIndex, state.q) : PRODUCTS;
+  const searchResults = state.q ? state.searchResults : PRODUCTS;
   let list = searchResults.filter(p => {
     if (state.cat && p.cat !== state.cat) return false;
     if (state.onlyFav && !state.favs.includes(p.id)) return false;
@@ -119,20 +136,39 @@ function cardHTML(p) {
 }
 
 function renderGrid() {
-  const { list, searchResults } = filtered();
+  const { list } = filtered();
   const c = CATEGORIES.find(c => c.id === state.cat);
-  $("#title").textContent = state.onlyFav ? "Sevimlilar" : state.q ? `«${state.q}» bo'yicha natijalar` : c ? c.name : "Barcha mahsulotlar";
+  $("#title").textContent = state.onlyFav ? "Sevimlilar" : state.q
+    ? state.searchCorrectedQuery
+      ? `«${state.q}» o'rniga «${state.searchCorrectedQuery}» bo'yicha natijalar`
+      : `«${state.q}» bo'yicha natijalar`
+    : c ? c.name : "Barcha mahsulotlar";
   const noProducts = !PRODUCTS.length;
   const hasFilters = !!(state.cat || state.q || state.onlyFav || state.min || state.max);
   $("#grid").setAttribute("aria-busy", "false");
   $("#grid").innerHTML = list.length ? list.map(cardHTML).join("") :
-    state.q && searchResults.length === 0 && PRODUCTS.length
-      ? `<div class="empty search-empty-state">${ic("search", 38)}<b>«${esc(state.q)}» bo'yicha mahsulot topilmadi</b><span>Qidiruv so'zini o'zgartiring yoki mashhur mahsulotlarni ko'ring.</span><div class="search-recommendations">${PRODUCTS.slice().sort((a, b) => b.sold - a.sold || b.rating - a.rating || Number(b.stock > 0) - Number(a.stock > 0)).slice(0, 4).map(cardHTML).join("")}</div></div>`
+    state.q && state.searchLoading
+      ? `<div class="empty">${ic("search", 38)}<b>Qidirilmoqda...</b></div>`
+      : state.q && !state.searchError
+        ? `<div class="empty search-empty-state">${ic("search", 38)}<b>«${esc(state.q)}» bo'yicha topilmadi</b><span>${state.searchSuggestions.length ? "Shuni nazarda tutdingizmi?" : "So'rov imlosini tekshiring yoki boshqa so'zlardan foydalaning."}</span>${state.searchSuggestions.length
+          ? `<div class="search-suggestions">${state.searchSuggestions.map(query => `<button class="btn line" data-search-query="${esc(query)}">${esc(query)}</button>`).join("")}</div>`
+          : ""}</div>`
+        : state.q && state.searchError
+          ? `<div class="empty">${ic("search", 38)}<b>Qidiruv bajarilmadi</b><span>${esc(state.searchError)}</span><button class="btn line" data-search-query="${esc(state.q)}">Qayta urinish</button></div>`
       : `<div class="empty">${ic(noProducts ? "package" : "search", 38)}<b>${noProducts ? "Hozircha mahsulotlar yo'q" : state.onlyFav ? "Sevimlilar ro'yxati bo'sh" : "Hech narsa topilmadi"}</b><span>${noProducts ? "Mahsulotlar qo'shilganda shu yerda ko'rinadi." : state.onlyFav ? "Yoqtirgan mahsulotlaringizni yurakcha orqali saqlang." : "Qidiruv so'zini yoki filtrlarni o'zgartirib ko'ring."}</span>${hasFilters ? `<button class="btn line" data-clear-filters>Filtrlarni tozalash</button>` : ""}</div>`;
   document.querySelectorAll("#chips .chip").forEach(button => {
     button.classList.toggle("on", (button.dataset.cat || null) === state.cat && !state.onlyFav);
   });
   $("#hero").hidden = !!(state.cat || state.q || state.onlyFav);
+}
+
+async function loadSellerSession() {
+  if (!localStorage.getItem("bz_seller_token")) return;
+  try { state.seller = await sellerApi("/me"); }
+  catch (error) {
+    if ([401, 403].includes(error.status)) localStorage.removeItem("bz_seller_token");
+    else console.error("Sotuvchi sessiyasini tekshirib bo'lmadi:", error);
+  }
 }
 
 function updateBadges() {
@@ -636,8 +672,17 @@ function openAccount(mode = "login") {
       <button class="account-menu-item" id="accountCart"><span class="account-menu-icon">${ic("cart", 21)}</span><span class="account-menu-label">Savat</span></button>
       <button class="account-menu-item" id="accountMessages"><span class="account-menu-icon">${ic("mail", 21)}</span><span class="account-menu-label">Xabarlar</span>${state.unreadMessages ? `<i>${state.unreadMessages > 99 ? "99+" : state.unreadMessages}</i>` : ""}</button>
       <button class="account-menu-item" id="myOrders"><span class="account-menu-icon">${ic("package", 21)}</span><span class="account-menu-label">Buyurtmalarim</span></button>
+      ${state.seller ? `<a class="account-menu-item" href="/seller.html"><span class="account-menu-icon">${ic("package", 21)}</span><span class="account-menu-label">Sotuvchi bo'limi</span></a>` : ""}
       ${state.user.role === "admin" ? `<a class="account-menu-item" href="/admin.html"><span class="account-menu-icon">${ic("user", 21)}</span><span class="account-menu-label">Admin panel</span></a>` : ""}
       <button class="account-menu-item" id="logout"><span class="account-menu-icon">${ic("x", 21)}</span><span class="account-menu-label">Chiqish</span></button>
+      </nav>`;
+    return;
+  }
+  if (state.seller) {
+    $("#accountBody").innerHTML = `<h2>${esc(state.seller.storeName)}</h2>
+      <p class="meta" style="margin-bottom:16px">${esc(state.seller.name)} · ${esc(state.seller.status)}</p>
+      <nav class="account-menu" aria-label="Profil menyusi">
+      <a class="account-menu-item" href="/seller.html"><span class="account-menu-icon">${ic("package", 21)}</span><span class="account-menu-label">Sotuvchi bo'limi</span></a>
       </nav>`;
     return;
   }
@@ -709,14 +754,36 @@ function setCat(c) {
 }
 function doSearch(q) {
   state.q = q.trim();
+  $("#q").value = state.q;
   state.cat = null;
   state.onlyFav = false;
+  state.searchResults = [];
+  state.searchCorrectedQuery = null;
+  state.searchSuggestions = [];
+  state.searchLoading = !!state.q;
+  state.searchError = null;
+  suggestionRequestId++;
   $("#suggest").hidden = true;
   renderGrid();
-  if (state.q && productsLoaded && !XaridorSearch.search(productSearchIndex, state.q).length) {
-    api("/search/no-results", { method: "POST", body: { query: state.q } })
-      .catch(error => console.error("Natijasiz qidiruvni qayd etib bo'lmadi:", error));
-  }
+  if (!state.q) return;
+  const requestId = ++searchRequestId;
+  api(`/search?q=${encodeURIComponent(state.q)}`)
+    .then(result => {
+      if (requestId !== searchRequestId) return;
+      state.searchResults = result.results;
+      state.searchCorrectedQuery = result.correctedQuery;
+      state.searchSuggestions = result.suggestions || [];
+      state.searchLoading = false;
+      renderGrid();
+      if (result.semanticUnavailable)
+        toast("Semantik qidiruv vaqtincha ishlamayapti; mavjud qidiruv natijalari ko'rsatildi.");
+    })
+    .catch(error => {
+      if (requestId !== searchRequestId) return;
+      state.searchLoading = false;
+      state.searchError = error.message;
+      renderGrid();
+    });
 }
 
 /* ---------- events ---------- */
@@ -724,6 +791,7 @@ document.addEventListener("click", e => {
   const t = e.target, g = a => t.closest(`[${a}]`);
   const accountAction = t.closest("#accountFavorites, #accountCart, #accountMessages, #myOrders, #logout, #messagesBtn");
   let el;
+  if ((el = g("data-search-query"))) return doSearch(el.dataset.searchQuery);
   if ((el = g("data-fav"))) { e.stopPropagation(); return toggleFav(+el.dataset.fav); }
   if ((el = g("data-add"))) return addToCart(+el.dataset.add, 1, el);
   if ((el = g("data-open"))) return openProduct(+el.dataset.open);
@@ -771,14 +839,24 @@ let suggestTimer;
 $("#q").addEventListener("input", e => {
   const value = e.target.value.trim(), suggest = $("#suggest");
   clearTimeout(suggestTimer);
-  if (!XaridorSearch.normalizeQuery(value)) { suggest.hidden = true; return; }
+  if (!value) { suggest.hidden = true; return; }
+  const requestId = ++suggestionRequestId;
   suggestTimer = setTimeout(() => {
-    const matches = XaridorSearch.search(productSearchIndex, value, 6);
-    suggest.innerHTML = matches.length
-      ? matches.map(product => `<button data-open="${product.id}">${product.image ? `<img class="search-thumb" src="${esc(product.image)}" alt="" loading="lazy">` : `<span class="search-icon">${ic(product.icon, 20)}</span>`}<span class="search-result"><b>${esc(product.name)}</b><small>${fmt(product.price)}</small></span></button>`).join("")
-      : `<div class="search-empty">${ic("search", 18)} Mos mahsulot topilmadi</div>`;
-    suggest.hidden = false;
-  }, 80);
+    api(`/search?q=${encodeURIComponent(value)}&suggest=1`)
+      .then(result => {
+        if (requestId !== suggestionRequestId || $("#q").value.trim() !== value) return;
+        const matches = result.results;
+        suggest.innerHTML = matches.length
+          ? matches.map(product => `<button data-open="${product.id}">${product.image ? `<img class="search-thumb" src="${esc(product.image)}" alt="" loading="lazy">` : `<span class="search-icon">${ic(product.icon, 20)}</span>`}<span class="search-result"><b>${esc(product.name)}</b><small>${fmt(product.price)}</small></span></button>`).join("")
+          : `<div class="search-empty">${ic("search", 18)} Mos mahsulot topilmadi</div>`;
+        suggest.hidden = false;
+      })
+      .catch(error => {
+        if (requestId !== suggestionRequestId) return;
+        console.error("Qidiruv takliflarini yuklab bo'lmadi:", error);
+        suggest.hidden = true;
+      });
+  }, 180);
 });
 $("#sort").onchange = e => { state.sort = e.target.value; renderGrid(); };
 $("#pmin").oninput = e => { state.min = +e.target.value || 0; renderGrid(); };
@@ -789,8 +867,6 @@ async function loadProducts() {
   if (!PRODUCTS.length) renderLoading();
   try {
     PRODUCTS = await api("/products");
-    productSearchIndex = XaridorSearch.createIndex(PRODUCTS);
-    productsLoaded = true;
     for (const id of Object.keys(state.cart)) if (!byId(+id)) delete state.cart[id];
     persist();
   } catch { toast("Server bilan aloqa yo'q"); }
@@ -816,6 +892,7 @@ async function boot() {
     } catch (e) { if (e.status === 401 || e.status === 403) logout(); }
     updateBadges();
   }
+  await loadSellerSession();
   await loadProducts();
   const productId = Number(new URLSearchParams(location.search).get("product"));
   if (Number.isSafeInteger(productId) && byId(productId)) {

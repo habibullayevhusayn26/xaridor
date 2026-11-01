@@ -8,7 +8,9 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { OAuth2Client } = require("google-auth-library");
 const rateLimit = require("express-rate-limit");
-const { normalizeQuery } = require("./public/search.js");
+const {
+  canonicalQuery, fuzzyRank, fuzzyScore, hybridRank, productSearchText
+} = require("./search-engine");
 
 // ---- .env (lokal ishga tushirish uchun; hostingda Environment ishlatiladi) ----
 try {
@@ -38,6 +40,14 @@ const TG_ADMIN_ID = env("TG_ADMIN_ID") || TG_CHAT;
 let telegramBotUsername = "";
 const PORT = env("PORT") || 3000;
 const GOOGLE_CLIENT_ID = env("GOOGLE_CLIENT_ID");
+const OPENAI_API_KEY = env("OPENAI_API_KEY");
+const SEARCH_EMBEDDING_MODEL = "text-embedding-3-small";
+const SEARCH_LLM_MODEL = "gpt-4o-mini";
+const SEARCH_EMBEDDING_DIMENSIONS = 1536;
+const SEARCH_SEMANTIC_THRESHOLD = 0.25;
+const SEARCH_RESULT_LIMIT = 40;
+const SEARCH_EMBEDDING_TIMEOUT_MS = 5000;
+const SEARCH_QUERY_EMBEDDING_TIMEOUT_MS = 350;
 const googleOAuthClient = new OAuth2Client(GOOGLE_CLIENT_ID || undefined);
 const USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const USER_CODE_LETTERS = USER_CODE_ALPHABET.slice(0, -8);
@@ -206,7 +216,144 @@ const htmlEscape = value => String(value).replace(/[&<>"']/g, character => ({
 }[character]));
 const ah = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-let db, users, sellers, products, orders, counters, slides, promos, promoUses, messages, reviews, messageCampaigns, searchQueries;
+let db, users, sellers, products, orders, counters, slides, promos, promoUses, messages, reviews, messageCampaigns, searchQueries, searchCache;
+const searchEmbeddingMemoryCache = new Map();
+const hashSearchText = value => crypto.createHash("sha256").update(value).digest("hex");
+const searchQueryCacheId = query => hashSearchText(canonicalQuery(query));
+
+async function openAiRequest(pathname, body, timeoutMs) {
+  if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY sozlanmagan.");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`https://api.openai.com/v1/${pathname}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok)
+      throw new Error(payload.error?.message || `OpenAI API HTTP ${response.status}`);
+    return payload;
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error(`OpenAI API ${timeoutMs} ms ichida javob bermadi.`);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function createEmbeddings(texts, timeoutMs = SEARCH_EMBEDDING_TIMEOUT_MS) {
+  if (!texts.length) return [];
+  const response = await openAiRequest("embeddings", {
+    model: SEARCH_EMBEDDING_MODEL,
+    input: texts,
+    dimensions: SEARCH_EMBEDDING_DIMENSIONS,
+    encoding_format: "float"
+  }, timeoutMs);
+  if (!Array.isArray(response.data) || response.data.length !== texts.length)
+    throw new Error("Embedding API noto'g'ri natija qaytardi.");
+  const vectors = response.data.sort((left, right) => left.index - right.index)
+    .map(item => item.embedding);
+  if (vectors.some(vector => !Array.isArray(vector) || vector.length !== SEARCH_EMBEDDING_DIMENSIONS ||
+      vector.some(value => !Number.isFinite(value))))
+    throw new Error("Embedding vektori noto'g'ri formatda.");
+  return vectors;
+}
+
+async function cachedQueryEmbedding(query) {
+  const normalized = canonicalQuery(query);
+  const cacheId = searchQueryCacheId(query);
+  const memoryCache = searchEmbeddingMemoryCache.get(cacheId);
+  if (memoryCache) return memoryCache;
+  const cached = await searchCache.findOne(
+    { _id: cacheId, expiresAt: { $gt: new Date() } },
+    { projection: { embedding: 1 } }
+  );
+  if (cached?.embedding) {
+    rememberQueryEmbedding(cacheId, cached.embedding);
+    return cached.embedding;
+  }
+  const embedding = (await createEmbeddings([normalized], SEARCH_QUERY_EMBEDDING_TIMEOUT_MS))[0];
+  const now = new Date();
+  await searchCache.updateOne(
+    { _id: cacheId },
+    {
+      $set: { normalized, embedding, updatedAt: now, expiresAt: new Date(now.getTime() + 30 * 86400000) },
+      $setOnInsert: { createdAt: now }
+    },
+    { upsert: true }
+  );
+  rememberQueryEmbedding(cacheId, embedding);
+  return embedding;
+}
+
+function rememberQueryEmbedding(cacheId, embedding) {
+  searchEmbeddingMemoryCache.delete(cacheId);
+  searchEmbeddingMemoryCache.set(cacheId, embedding);
+  if (searchEmbeddingMemoryCache.size > 500)
+    searchEmbeddingMemoryCache.delete(searchEmbeddingMemoryCache.keys().next().value);
+}
+
+async function attachProductEmbedding(product) {
+  const text = productSearchText(product, CATEGORIES);
+  const hash = hashSearchText(`${SEARCH_EMBEDDING_MODEL}\0${text}`);
+  if (product.searchEmbedding?.hash === hash &&
+      product.searchEmbedding?.model === SEARCH_EMBEDDING_MODEL &&
+      product.searchEmbedding?.vector?.length === SEARCH_EMBEDDING_DIMENSIONS) return product;
+  let vector;
+  try { [vector] = await createEmbeddings([text]); }
+  catch (error) {
+    const unavailable = new Error("AI qidiruv indeksi yangilanmadi. Mahsulot o'zgarishi saqlanmadi.");
+    unavailable.statusCode = 503;
+    unavailable.cause = error;
+    throw unavailable;
+  }
+  return {
+    ...product,
+    searchEmbedding: { model: SEARCH_EMBEDDING_MODEL, hash, vector, updatedAt: new Date() }
+  };
+}
+
+async function correctSearchQuery(query, candidates) {
+  const productsContext = candidates.slice(0, 20).map(product => ({
+    name: product.name,
+    category: CATEGORIES.find(category => category.id === product.cat)?.name || product.cat
+  }));
+  const response = await openAiRequest("chat/completions", {
+    model: SEARCH_LLM_MODEL,
+    temperature: 0,
+    max_tokens: 120,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: "Siz onlayn do'kon qidiruv yordamchisisiz. Xato yozilgan, lotin/kirill/rus/ingliz aralash so'rovni tuzating; ma'nosini saqlang va kategoriya ID sini faqat ro'yxatdan tanlang. Mahsulot nomlaridan mos atama topilsa, undan foydalaning. Faqat JSON qaytaring: {\"query\":\"...\",\"category\":\"category-id yoki null\"}. So'rovni mahsulot nomiga moslab o'zgartirmang, agar ma'nosi aniq bo'lmasa query ni asl holiga yaqin qoldiring."
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          query: String(query).slice(0, 100),
+          categories: CATEGORIES.map(category => ({ id: category.id, name: category.name })),
+          availableProducts: productsContext
+        })
+      }
+    ]
+  }, 2000);
+  const content = response.choices?.[0]?.message?.content;
+  if (typeof content !== "string") throw new Error("LLM so'rovni tuzatish javobi bo'sh.");
+  let result;
+  try { result = JSON.parse(content); }
+  catch { throw new Error("LLM so'rovni tuzatish javobi JSON emas."); }
+  const correctedQuery = typeof result.query === "string" ? result.query.trim().slice(0, 100) : "";
+  const category = CATEGORIES.some(item => item.id === result.category) ? result.category : null;
+  if (correctedQuery.length < 2) throw new Error("LLM tuzatilgan qidiruv so'rovini bermadi.");
+  return { query: correctedQuery, category };
+}
 
 const promoOut = p => ({
   code: p.code, type: p.type, value: p.value, active: !!p.active,
@@ -1251,11 +1398,11 @@ async function handleTelegramSellerMessage(message, seller, command, text) {
   if (flow.action === "edit") {
     const fields = text.split("|").map(value => value.trim());
     if (fields.length < 6 || !fields[0] || !fields[1] || !fields[2] || !fields[3] || !fields[4])
-      return reply("Format: Nomi | Kategoriya ID | Narxi | Eski narxi | Ombor | Tavsif\nBekor qilish: /cancel");
+      return reply("Format: Nomi | Kategoriya ID | Narxi | Eski narxi | Ombor | Tavsif | Teglar (ixtiyoriy)\nBekor qilish: /cancel");
     if (!/^\d{1,12}$/.test(fields[2]) || !/^\d{1,12}$/.test(fields[3]) ||
         !/^\d{1,6}$/.test(fields[4]) ||
         !Number.isSafeInteger(Number(fields[2])) || !Number.isSafeInteger(Number(fields[3])))
-      return reply("Narx va omborni butun son bilan kiriting.\nFormat: Nomi | Kategoriya ID | Narxi | Eski narxi | Ombor | Tavsif");
+      return reply("Narx va omborni butun son bilan kiriting.\nFormat: Nomi | Kategoriya ID | Narxi | Eski narxi | Ombor | Tavsif | Teglar (ixtiyoriy)");
     let updatedProduct;
     try {
       updatedProduct = readProduct({
@@ -1265,21 +1412,25 @@ async function handleTelegramSellerMessage(message, seller, command, text) {
         price: fields[2],
         old: fields[3],
         stock: fields[4],
-        desc: fields.slice(5).join(" | "),
+        desc: fields.slice(5, fields.length > 6 ? 6 : undefined).join(" | "),
+        tags: fields.length > 6 ? fields.slice(6).join(" | ") : product.tags || [],
         active: product.active
       });
     } catch (error) {
-      return reply(`${error.message}\nQayta yuboring: Nomi | Kategoriya ID | Narxi | Eski narxi | Ombor | Tavsif`);
+      return reply(`${error.message}\nQayta yuboring: Nomi | Kategoriya ID | Narxi | Eski narxi | Ombor | Tavsif | Teglar (ixtiyoriy)`);
     }
+    const indexedProduct = await attachProductEmbedding({ ...product, ...updatedProduct });
     const result = await products.updateOne(
       { _id: product._id, sellerId: seller._id },
       { $set: {
-        name: updatedProduct.name,
-        cat: updatedProduct.cat,
-        price: updatedProduct.price,
-        old: updatedProduct.old,
-        stock: updatedProduct.stock,
-        descr: updatedProduct.descr
+        name: indexedProduct.name,
+        cat: indexedProduct.cat,
+        price: indexedProduct.price,
+        old: indexedProduct.old,
+        stock: indexedProduct.stock,
+        descr: indexedProduct.descr,
+        tags: indexedProduct.tags,
+        searchEmbedding: indexedProduct.searchEmbedding
       } }
     );
     if (!result.matchedCount)
@@ -1900,8 +2051,109 @@ function readSellerProfile(body, defaultName) {
   if (address.length < 5) throw new Error("Do'kon manzilini to'liq kiriting.");
   return { name, phone, storeName, address };
 }
+function searchConfidence(result) {
+  if (!result) return 0;
+  return Math.max(
+    result.fuzzyScore,
+    result.semanticScore > 0 ? (result.semanticScore - SEARCH_SEMANTIC_THRESHOLD) / (1 - SEARCH_SEMANTIC_THRESHOLD) : 0
+  );
+}
+async function rankProductQuery(query, allProducts, queryVector, categoryHint = null, fuzzyResults = null) {
+  return hybridRank(allProducts, query, queryVector, {
+    categories: CATEGORIES,
+    semanticThreshold: SEARCH_SEMANTIC_THRESHOLD,
+    categoryHint,
+    fuzzyResults
+  });
+}
+async function runProductSearch(query, { suggestionsOnly = false } = {}) {
+  const allProducts = await products.find({ active: true }).sort({ sold: -1 }).toArray();
+  if (suggestionsOnly) {
+    const fuzzy = await rankProductQuery(query, allProducts, null);
+    return { results: fuzzy.slice(0, 6).map(item => item.product), correctedQuery: null, suggestions: [] };
+  }
+
+  let semanticUnavailable = false;
+  const [fuzzyResults, queryVector] = await Promise.all([
+    Promise.resolve().then(() => fuzzyRank(allProducts, query, CATEGORIES)),
+    cachedQueryEmbedding(query).catch(error => {
+      semanticUnavailable = true;
+      console.warn("Semantik qidiruv vaqtincha ishlamayapti:", error.message);
+      return null;
+    })
+  ]);
+  const vector = queryVector;
+  let ranked = await rankProductQuery(query, allProducts, vector, null, fuzzyResults);
+  let correctedQuery = null;
+  let suggestions = [];
+  const top = ranked[0];
+  if ((!top || searchConfidence(top) < 0.42) && OPENAI_API_KEY) {
+    const cacheId = searchQueryCacheId(query);
+    try {
+      let correction = await searchCache.findOne(
+        { _id: cacheId, correctedQuery: { $type: "string" } },
+        { projection: { correctedQuery: 1, correctedCategory: 1 } }
+      );
+      if (!correction) {
+        const fuzzyCandidates = (await rankProductQuery(query, allProducts, null))
+          .slice(0, 20).map(item => item.product);
+        const suggested = await correctSearchQuery(query, fuzzyCandidates);
+        correction = { correctedQuery: suggested.query, correctedCategory: suggested.category };
+        await searchCache.updateOne(
+          { _id: cacheId },
+          {
+            $set: {
+              correctedQuery: correction.correctedQuery,
+              correctedCategory: correction.correctedCategory,
+              correctedAt: new Date(),
+              expiresAt: new Date(Date.now() + 30 * 86400000)
+            }
+          },
+          { upsert: true }
+        );
+      }
+      if (canonicalQuery(correction.correctedQuery) !== canonicalQuery(query)) {
+        let correctedVector = null;
+        try { correctedVector = await cachedQueryEmbedding(correction.correctedQuery); }
+        catch (error) {
+          semanticUnavailable = true;
+          console.warn("Tuzatilgan so'rov embeddingi olinmadi:", error.message);
+        }
+        const correctedRanked = await rankProductQuery(
+          correction.correctedQuery, allProducts, correctedVector, correction.correctedCategory
+        );
+        if (correctedRanked.length &&
+            (!ranked.length || searchConfidence(correctedRanked[0]) > searchConfidence(ranked[0]))) {
+          ranked = correctedRanked;
+          correctedQuery = correction.correctedQuery;
+        }
+      }
+    } catch (error) {
+      console.warn("LLM qidiruv so'rovini tuzatolmadi:", error.message);
+    }
+  }
+  if (!ranked.length) {
+    suggestions = [...new Map(allProducts
+      .map(product => ({
+        product,
+        score: fuzzyScore(product, query, CATEGORIES)
+      }))
+      .filter(item => item.score >= 0.06)
+      .sort((left, right) => right.score - left.score ||
+        (Number(right.product.sold) || 0) - (Number(left.product.sold) || 0))
+      .map(item => [item.product.name, item])).values()]
+      .slice(0, 3)
+      .map(item => item.product.name);
+  }
+  return {
+    results: ranked.slice(0, SEARCH_RESULT_LIMIT).map(item => item.product),
+    correctedQuery,
+    suggestions: correctedQuery ? [correctedQuery] : suggestions,
+    semanticUnavailable
+  };
+}
 const productOut = p => ({ id: p._id, name: p.name, cat: p.cat, price: p.price, old: p.old, rating: p.rating,
-  sold: p.sold, icon: p.icon, color: p.color, image: p.image ? `/api/products/${p._id}/image` : null,
+  sold: p.sold, tags: p.tags || [], icon: p.icon, color: p.color, image: p.image ? `/api/products/${p._id}/image` : null,
   desc: p.descr, stock: p.stock, active: !!p.active, sellerStoreName: p.sellerStoreName || null });
 async function publicProductListOut(list) {
   const sellerIds = [...new Map(list.filter(product => product.sellerId && !product.sellerStoreName)
@@ -1981,8 +2233,8 @@ const sellerAuthLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, stand
   message: { error: "Juda ko'p urinish. Bir soatdan keyin qayta urinib ko'ring." } });
 const orderLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false,
   message: { error: "Juda ko'p buyurtma. Keyinroq urinib ko'ring." } });
-const searchQueryLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false,
-  message: { error: "Qidiruv so'rovlari limiti tugadi. Keyinroq urinib ko'ring." } });
+const productSearchLimiter = rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: true, legacyHeaders: false,
+  message: { error: "Qidiruv so'rovlari limiti tugadi. Birozdan keyin qayta urinib ko'ring." } });
 
 // ---- Ochiq API ----
 app.get("/api/health", (req, res) => res.json({ ok: true }));
@@ -2006,25 +2258,36 @@ app.get("/api/promos/:code", ah(async (req, res) => {
   if (!promo) return res.status(400).json({ error: "Promokod noto'g'ri, muddati tugagan yoki limiti to'lgan." });
   res.json(promoOut(promo));
 }));
+app.get("/api/search", productSearchLimiter, ah(async (req, res) => {
+  const startedAt = performance.now();
+  const query = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
+  if (!query) return res.status(400).json({ error: "Qidiruv so'rovini kiriting." });
+  const suggestionsOnly = req.query.suggest === "1";
+  const result = await runProductSearch(query, { suggestionsOnly });
+  if (!suggestionsOnly && !result.results.length) {
+    const now = new Date();
+    const day = now.toISOString().slice(0, 10);
+    await searchQueries.updateOne(
+      { normalized: canonicalQuery(query), day },
+      {
+        $set: { query, lastSeen: now, expireAt: new Date(now.getTime() + 90 * 86400000) },
+        $setOnInsert: { firstSeen: now },
+        $inc: { count: 1 }
+      },
+      { upsert: true }
+    );
+  }
+  res.json({
+    query,
+    correctedQuery: result.correctedQuery,
+    suggestions: result.suggestions,
+    results: await publicProductListOut(result.results),
+    semanticUnavailable: !!result.semanticUnavailable,
+    durationMs: Math.round(performance.now() - startedAt)
+  });
+}));
 app.get("/api/products", ah(async (req, res) =>
   res.json(await publicProductListOut(await products.find({ active: true }).sort({ sold: -1 }).toArray()))));
-app.post("/api/search/no-results", searchQueryLimiter, ah(async (req, res) => {
-  const query = typeof req.body?.query === "string" ? req.body.query.trim().slice(0, 100) : "";
-  const normalized = normalizeQuery(query);
-  if (!normalized) return res.status(400).json({ error: "Qidiruv so'rovini kiriting." });
-  const now = new Date();
-  const day = now.toISOString().slice(0, 10);
-  await searchQueries.updateOne(
-    { normalized, day },
-    {
-      $set: { query, lastSeen: now, expireAt: new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000) },
-      $setOnInsert: { firstSeen: now },
-      $inc: { count: 1 }
-    },
-    { upsert: true }
-  );
-  res.status(204).end();
-}));
 app.get("/api/products/:id/reviews", auth(false), ah(async (req, res) => {
   const productId = Number(req.params.id);
   if (!Number.isSafeInteger(productId)) return res.status(404).json({ error: "Mahsulot topilmadi." });
@@ -2581,12 +2844,15 @@ admin.get("/products", ah(async (req, res) =>
   res.json((await products.find().sort({ _id: -1 }).toArray()).map(productOut))));
 
 function readProduct(b) {
+  const rawTags = Array.isArray(b.tags) ? b.tags.join(",") : String(b.tags || "");
   const p = {
     name: String(b.name || "").trim().slice(0, 120), cat: String(b.cat || ""),
     price: Math.round(Number(b.price)), old: Math.round(Number(b.old) || Number(b.price)),
     icon: /^[a-z-]{2,24}$/.test(b.icon) ? b.icon : "package",
     color: /^#[0-9a-fA-F]{6}$/.test(b.color) ? b.color : "#E6EEF0",
-    descr: String(b.desc || "").slice(0, 1000), stock: Math.max(0, Math.round(Number(b.stock) || 0)),
+    descr: String(b.desc || "").slice(0, 1000),
+    tags: [...new Set(rawTags.split(/[,;\n]/).map(tag => tag.trim().slice(0, 40)).filter(Boolean))].slice(0, 20),
+    stock: Math.max(0, Math.round(Number(b.stock) || 0)),
     active: !(b.active === false || b.active === 0)
   };
   if (p.name.length < 2) throw new Error("Mahsulot nomini kiriting.");
@@ -2601,7 +2867,10 @@ admin.post("/products", ah(async (req, res) => {
     p = readProduct(req.body);
     if (req.body.image) image = readProductImage(req.body.image);
   } catch (e) { return res.status(400).json({ error: e.message }); }
-  const doc = { _id: await nextProductId(), ...p, ...(image ? { image } : {}), rating: 4.5, sold: 0, created: new Date() };
+  const doc = await attachProductEmbedding({
+    _id: await nextProductId(), ...p, ...(image ? { image } : {}),
+    rating: 4.5, sold: 0, created: new Date()
+  });
   await products.insertOne(doc);
   res.json(productOut(doc));
 }));
@@ -2611,8 +2880,14 @@ admin.put("/products/:id", ah(async (req, res) => {
     p = readProduct(req.body);
     if (req.body.image) image = readProductImage(req.body.image);
   } catch (e) { return res.status(400).json({ error: e.message }); }
+  const current = await products.findOne({ _id: Number(req.params.id) });
+  if (!current) return res.status(404).json({ error: "Mahsulot topilmadi." });
+  const indexedProduct = await attachProductEmbedding({ ...current, ...p });
   const removeImage = req.body.removeImage === true || req.body.removeImage === "true" || req.body.removeImage === "on";
-  const update = { $set: { ...p }, ...(image ? {} : removeImage ? { $unset: { image: "" } } : {}) };
+  const update = {
+    $set: { ...p, searchEmbedding: indexedProduct.searchEmbedding },
+    ...(image ? {} : removeImage ? { $unset: { image: "" } } : {})
+  };
   if (image) update.$set.image = image;
   const r = await products.findOneAndUpdate({ _id: Number(req.params.id) }, update, { returnDocument: "after" });
   if (!r) return res.status(404).json({ error: "Mahsulot topilmadi." });
@@ -2683,11 +2958,11 @@ sellerRouter.post("/products", ah(async (req, res) => {
     product = readProduct({ ...req.body, active: true });
     if (req.body.image) image = readProductImage(req.body.image);
   } catch (error) { return res.status(400).json({ error: error.message }); }
-  const doc = {
+  const doc = await attachProductEmbedding({
     _id: await nextProductId(), ...product, active: true, sellerId: req.user._id,
     sellerStoreName: req.user.storeName,
     ...(image ? { image } : {}), rating: 0, sold: 0, created: new Date()
-  };
+  });
   await products.insertOne(doc);
   res.status(201).json(productOut(doc));
 }));
@@ -2702,7 +2977,11 @@ sellerRouter.put("/products/:id", ah(async (req, res) => {
     if (req.body.image) image = readProductImage(req.body.image);
   } catch (error) { return res.status(400).json({ error: error.message }); }
   const removeImage = req.body.removeImage === true || req.body.removeImage === "true";
-  const update = { $set: { ...product }, ...(image ? {} : removeImage ? { $unset: { image: "" } } : {}) };
+  const indexedProduct = await attachProductEmbedding({ ...current, ...product });
+  const update = {
+    $set: { ...product, searchEmbedding: indexedProduct.searchEmbedding },
+    ...(image ? {} : removeImage ? { $unset: { image: "" } } : {})
+  };
   if (image) update.$set.image = image;
   const result = await products.findOneAndUpdate(
     { _id: Number(req.params.id), sellerId: req.user._id }, update, { returnDocument: "after" }
@@ -2738,7 +3017,12 @@ app.use("/api", (req, res) => res.status(404).json({ error: "Topilmadi." }));
 app.use(express.static(path.join(__dirname, "public")));
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({ error: "Server xatosi." });
+  const status = Number.isInteger(err.statusCode) && err.statusCode >= 400 && err.statusCode < 600
+    ? err.statusCode
+    : 500;
+  res.status(status).json({
+    error: status === 503 ? err.message : "Server xatosi."
+  });
 });
 
 // ---- Ishga tushirish ----
@@ -2771,6 +3055,7 @@ async function main() {
   messages = db.collection("messages"); reviews = db.collection("reviews");
   messageCampaigns = db.collection("messageCampaigns");
   searchQueries = db.collection("searchQueries");
+  searchCache = db.collection("searchCache");
   await users.createIndex({ phone: 1 }, { unique: true });
   await sellers.createIndex({ email: 1 }, { unique: true });
   await sellers.createIndex({ phone: 1 }, { unique: true });
@@ -2783,6 +3068,7 @@ async function main() {
   await products.createIndex({ active: 1, sold: -1 });
   await searchQueries.createIndex({ normalized: 1, day: 1 }, { unique: true });
   await searchQueries.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 });
+  await searchCache.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
   await slides.createIndex({ created: 1 });
   await promos.createIndex({ code: 1 }, { unique: true });
   await promoUses.createIndex({ code: 1, uses: -1 });
