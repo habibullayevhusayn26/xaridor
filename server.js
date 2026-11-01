@@ -135,6 +135,12 @@ function telegramButton(text, emoji, properties = {}) {
     icon_custom_emoji_id: options[use % options.length]
   };
 }
+function telegramButtonRows(buttons, rowSize = 5) {
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += rowSize)
+    rows.push(buttons.slice(index, index + rowSize));
+  return rows;
+}
 const TELEGRAM_EMOJI_PATTERN = new RegExp(
   `(?:${[...TELEGRAM_PREMIUM_EMOJIS.keys()].sort((a, b) => b.length - a.length).join("|")}|` +
   "(?:\\p{Regional_Indicator}{2}|\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E)?(?:\\p{Emoji_Modifier})?(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E)?(?:\\p{Emoji_Modifier})?)*|\\d\\uFE0F?\\u20E3))",
@@ -627,11 +633,11 @@ async function showTelegramCustomerProducts(chatId, categoryId, page = 0, messag
         `${currentPage * pageSize + index + 1}. ${product.name}\n   ${fmtSum(product.price)}${product.stock <= 0 ? " · Omborda yo'q" : ""}`
       ).join("\n\n")
     : "🛍 Bu bo'limda hozircha mahsulot yo'q.";
-  const keyboard = list.map((product, index) => [{
+  const keyboard = telegramButtonRows(list.map((product, index) => ({
     text: String(currentPage * pageSize + index + 1),
     callback_data: `shop:product:${product._id}`,
     style: "primary"
-  }]);
+  })));
   if (currentPage > 0 || currentPage + 1 < pageCount) {
     keyboard.push([
       ...(currentPage > 0 ? [telegramButton("Oldingi", "⬅️", {
@@ -785,11 +791,11 @@ async function handleTelegramCustomerMessage(message, command, text) {
       active: true, name: { $regex: escapedQuery, $options: "i" }
     }).sort({ sold: -1 }).limit(8).toArray();
     if (!results.length) return reply(`🔎 «${query}» bo'yicha mahsulot topilmadi.`);
-    const keyboard = results.map((product, index) => [{
+    const keyboard = telegramButtonRows(results.map((product, index) => ({
       text: String(index + 1),
       callback_data: `shop:product:${product._id}`,
       style: "primary"
-    }]);
+    })));
     return reply(`🔎 «${query}» bo'yicha topilgan mahsulotlar:\n\n${results.map((product, index) =>
       `${index + 1}. ${product.name} — ${fmtSum(product.price)}`
     ).join("\n")}`, {
