@@ -58,6 +58,7 @@ const TELEGRAM_CUSTOMER_SEARCH_BUTTON = "Mahsulot qidirish";
 const TELEGRAM_CUSTOMER_HELP_BUTTON = "Yordam";
 const TELEGRAM_CUSTOMER_SUPPORT_URL = "https://t.me/habibullayev_28";
 const PUBLIC_SITE_URL = env("PUBLIC_SITE_URL").replace(/\/+$/, "");
+const SITE_BASE_URL = PUBLIC_SITE_URL || env("RENDER_EXTERNAL_URL").replace(/\/+$/, "");
 if (PUBLIC_SITE_URL) {
   try {
     const siteUrl = new URL(PUBLIC_SITE_URL);
@@ -67,6 +68,12 @@ if (PUBLIC_SITE_URL) {
     console.error("[XATO] PUBLIC_SITE_URL noto'g'ri:", error.message);
     process.exit(1);
   }
+}
+function telegramProductUrl(productId) {
+  if (!SITE_BASE_URL) return null;
+  const url = new URL("/", SITE_BASE_URL);
+  url.searchParams.set("product", String(productId));
+  return url.toString();
 }
 
 // ---- Telegram ----
@@ -587,12 +594,12 @@ async function showTelegramCustomerCategories(chatId, messageId = null) {
       })
     ));
   }
-  if (PUBLIC_SITE_URL) {
+  if (SITE_BASE_URL) {
     keyboard.push([telegramButton("Saytda xarid qilish", "🚀", {
-      url: `${PUBLIC_SITE_URL}/#grid`, style: "success"
+      url: SITE_BASE_URL, style: "success"
     })]);
   }
-  const replyMarkup = { inline_keyboard: keyboard };
+  const replyMarkup = keyboard.length ? { inline_keyboard: keyboard } : telegramCustomerKeyboard;
   const text = categories.length
     ? "🛍 Mahsulot turini tanlang:"
     : "🛍 Hozircha katalogda faol mahsulotlar yo'q.";
@@ -617,12 +624,12 @@ async function showTelegramCustomerProducts(chatId, categoryId, page = 0, messag
   const text = list.length
     ? `🛍 ${categoryName} · ${currentPage + 1}/${pageCount}\n\n` +
       list.map((product, index) =>
-        `${index + 1}. ${product.name}\n   ${fmtSum(product.price)}${product.stock <= 0 ? " · Omborda yo'q" : ""}`
+        `${currentPage * pageSize + index + 1}. ${product.name}\n   ${fmtSum(product.price)}${product.stock <= 0 ? " · Omborda yo'q" : ""}`
       ).join("\n\n")
     : "🛍 Bu bo'limda hozircha mahsulot yo'q.";
-  const keyboard = list.map(product => [
+  const keyboard = list.map((product, index) => [
     telegramButton(
-      `${product.name.slice(0, 34)} · ${fmtSum(product.price)}`,
+      `${currentPage * pageSize + index + 1}. ${product.name.slice(0, 30)}`,
       "🛒",
       { callback_data: `shop:product:${product._id}`, style: "primary" }
     )
@@ -640,9 +647,9 @@ async function showTelegramCustomerProducts(chatId, categoryId, page = 0, messag
   keyboard.push([telegramButton("Bo'limlarni tanlash", "↩️", {
     callback_data: "shop:categories", style: "primary"
   })]);
-  if (PUBLIC_SITE_URL) {
+  if (SITE_BASE_URL) {
     keyboard.push([telegramButton("Saytda xarid qilish", "🚀", {
-      url: `${PUBLIC_SITE_URL}/#grid`, style: "success"
+      url: SITE_BASE_URL, style: "success"
     })]);
   }
   const replyMarkup = { inline_keyboard: keyboard };
@@ -653,16 +660,18 @@ async function showTelegramCustomerProducts(chatId, categoryId, page = 0, messag
   }
 }
 
-async function showTelegramCustomerProduct(chatId, productId, messageId) {
+async function showTelegramCustomerProduct(chatId, productId, messageId = null) {
   const product = await products.findOne({ _id: Number(productId), active: true });
   if (!product) {
-    await tgCall("editMessageText", {
-      chat_id: chatId, message_id: messageId,
+    const payload = {
+      chat_id: chatId,
       text: "Bu mahsulot endi mavjud emas.",
       reply_markup: { inline_keyboard: [[telegramButton("Bo'limlarni tanlash", "↩️", {
         callback_data: "shop:categories", style: "primary"
       })]] }
-    });
+    };
+    if (messageId) await tgCall("editMessageText", { ...payload, message_id: messageId });
+    else await tgCall("sendMessage", payload);
     return;
   }
   const categoryName = CATEGORIES.find(category => category.id === product.cat)?.name || product.cat;
@@ -671,18 +680,18 @@ async function showTelegramCustomerProduct(chatId, productId, messageId) {
     `\nReyting: ${product.rating} · Sotilgan: ${product.sold}\nOmbor: ${product.stock > 0 ? `${product.stock} dona` : "tugagan"}` +
     `${product.descr ? `\n\n${product.descr}` : ""}`;
   const keyboard = [];
-  if (product.stock > 0 && PUBLIC_SITE_URL) {
+  if (product.stock > 0 && SITE_BASE_URL) {
+    const purchaseUrl = telegramProductUrl(product._id);
     keyboard.push([telegramButton("Saytda xarid qilish", "🛒", {
-      url: `${PUBLIC_SITE_URL}/#grid`, style: "success"
+      url: purchaseUrl, style: "success"
     })]);
   }
   keyboard.push([telegramButton("Bo'limga qaytish", "↩️", {
     callback_data: `shop:category:${product.cat}:0`, style: "primary"
   })]);
-  await tgCall("editMessageText", {
-    chat_id: chatId, message_id: messageId, text,
-    reply_markup: { inline_keyboard: keyboard }
-  });
+  const payload = { chat_id: chatId, text, reply_markup: { inline_keyboard: keyboard } };
+  if (messageId) await tgCall("editMessageText", { ...payload, message_id: messageId });
+  else await tgCall("sendMessage", payload);
 }
 
 async function handleTelegramCustomerCallback(callback) {
@@ -717,13 +726,13 @@ async function handleTelegramCustomerCallback(callback) {
   }
   await tgCall("answerCallbackQuery", { callback_query_id: callback.id });
   if (parts[1] === "categories" && parts.length === 2) {
-    return showTelegramCustomerCategories(chatId, callback.message.message_id);
+    return showTelegramCustomerCategories(chatId);
   }
   if (parts[1] === "category" && parts.length === 4 && /^\d+$/.test(parts[3])) {
     return showTelegramCustomerProducts(chatId, parts[2], Number(parts[3]), callback.message.message_id);
   }
   if (parts[1] === "product" && parts.length === 3 && /^\d{1,12}$/.test(parts[2])) {
-    return showTelegramCustomerProduct(chatId, parts[2], callback.message.message_id);
+    return showTelegramCustomerProduct(chatId, parts[2]);
   }
   if (parts[1] === "home" && parts.length === 2) {
     return tgCall("editMessageText", {
@@ -778,12 +787,14 @@ async function handleTelegramCustomerMessage(message, command, text) {
       active: true, name: { $regex: escapedQuery, $options: "i" }
     }).sort({ sold: -1 }).limit(8).toArray();
     if (!results.length) return reply(`🔎 «${query}» bo'yicha mahsulot topilmadi.`);
-    const keyboard = results.map(product => [
-      telegramButton(`${product.name.slice(0, 34)} · ${fmtSum(product.price)}`, "🛒", {
+    const keyboard = results.map((product, index) => [
+      telegramButton(`${index + 1}. ${product.name.slice(0, 30)}`, "🛒", {
         callback_data: `shop:product:${product._id}`, style: "primary"
       })
     ]);
-    return reply(`🔎 «${query}» bo'yicha topilgan mahsulotlar:`, {
+    return reply(`🔎 «${query}» bo'yicha topilgan mahsulotlar:\n\n${results.map((product, index) =>
+      `${index + 1}. ${product.name} — ${fmtSum(product.price)}`
+    ).join("\n")}`, {
       inline_keyboard: keyboard
     });
   }

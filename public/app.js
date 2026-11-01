@@ -795,6 +795,14 @@ async function boot() {
     updateBadges();
   }
   await loadProducts();
+  const productId = Number(new URLSearchParams(location.search).get("product"));
+  if (Number.isSafeInteger(productId) && byId(productId)) {
+    state.cat = null;
+    state.q = "";
+    $("#q").value = "";
+    renderGrid();
+    openProduct(productId);
+  }
   setInterval(() => refreshMessages(true), 60000);
 }
 boot();
