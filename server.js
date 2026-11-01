@@ -627,13 +627,11 @@ async function showTelegramCustomerProducts(chatId, categoryId, page = 0, messag
         `${currentPage * pageSize + index + 1}. ${product.name}\n   ${fmtSum(product.price)}${product.stock <= 0 ? " · Omborda yo'q" : ""}`
       ).join("\n\n")
     : "🛍 Bu bo'limda hozircha mahsulot yo'q.";
-  const keyboard = list.map((product, index) => [
-    telegramButton(
-      `${currentPage * pageSize + index + 1}. ${product.name.slice(0, 30)}`,
-      "🛒",
-      { callback_data: `shop:product:${product._id}`, style: "primary" }
-    )
-  ]);
+  const keyboard = list.map((product, index) => [{
+    text: String(currentPage * pageSize + index + 1),
+    callback_data: `shop:product:${product._id}`,
+    style: "primary"
+  }]);
   if (currentPage > 0 || currentPage + 1 < pageCount) {
     keyboard.push([
       ...(currentPage > 0 ? [telegramButton("Oldingi", "⬅️", {
@@ -787,11 +785,11 @@ async function handleTelegramCustomerMessage(message, command, text) {
       active: true, name: { $regex: escapedQuery, $options: "i" }
     }).sort({ sold: -1 }).limit(8).toArray();
     if (!results.length) return reply(`🔎 «${query}» bo'yicha mahsulot topilmadi.`);
-    const keyboard = results.map((product, index) => [
-      telegramButton(`${index + 1}. ${product.name.slice(0, 30)}`, "🛒", {
-        callback_data: `shop:product:${product._id}`, style: "primary"
-      })
-    ]);
+    const keyboard = results.map((product, index) => [{
+      text: String(index + 1),
+      callback_data: `shop:product:${product._id}`,
+      style: "primary"
+    }]);
     return reply(`🔎 «${query}» bo'yicha topilgan mahsulotlar:\n\n${results.map((product, index) =>
       `${index + 1}. ${product.name} — ${fmtSum(product.price)}`
     ).join("\n")}`, {
